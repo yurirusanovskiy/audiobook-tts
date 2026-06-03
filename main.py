@@ -7,8 +7,7 @@ from db.database import create_db_and_tables
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # This runs on startup
-    print("Initializing database tables...")
-    create_db_and_tables()
+    print("Starting up (Alembic manages the DB)...")
     yield
     # This runs on shutdown
     print("Shutting down...")
