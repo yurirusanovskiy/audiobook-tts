@@ -61,18 +61,37 @@ class RussianPreprocessor(BasePreprocessor):
         return self._accentuator
 
     def process(self, text: str, dictionary: Dict[str, str]) -> str:
-        # First, apply our custom exact replacements (so ruaccent doesn't mess them up)
-        # Note: If ruaccent overrides them, we might need to apply custom dict *after*.
-        # However, ruaccent usually ignores words with explicit plus signs if we format them,
-        # but for safety, let's apply our dictionary before accentuation so custom words are protected
-        # (or apply it after if we want to override ruaccent's output. Usually 'after' or 'before' depends on the token).
-        # We'll do it before so that our explicit + marks pass through.
-        text_with_custom = self.apply_dictionary(text, dictionary)
+        """
+        Flow for Russian:
+        1. Replace dictionary words with unique English placeholders (e.g. CWORD0)
+        2. Pass text through ruaccent (it ignores English words and processes Russian)
+        3. Replace placeholders with the actual phonetic rules from the dictionary.
+        Priority: User Dictionary > ruaccent ML.
+        """
+        if not dictionary:
+            accentuator = self._get_accentuator()
+            return accentuator.process_all(text)
+
+        # 1. Protection phase (Placeholders)
+        protected_text = text
+        placeholder_map = {}
         
-        # Load model and apply ML accentuation
+        for i, (word, replacement) in enumerate(dictionary.items()):
+            placeholder = f"CWORD{i}"
+            placeholder_map[placeholder] = replacement
+            # Replace original word with placeholder
+            pattern = re.compile(rf'\b{re.escape(word)}\b', re.IGNORECASE)
+            protected_text = pattern.sub(placeholder, protected_text)
+
+        # 2. ML Accentuation
         accentuator = self._get_accentuator()
-        final_text = accentuator.process_all(text_with_custom)
-        
+        ml_processed_text = accentuator.process_all(protected_text)
+
+        # 3. Restoration phase (Apply user phonetics)
+        final_text = ml_processed_text
+        for placeholder, replacement in placeholder_map.items():
+            final_text = final_text.replace(placeholder, replacement)
+            
         return final_text
 
 class PreprocessorFactory:
