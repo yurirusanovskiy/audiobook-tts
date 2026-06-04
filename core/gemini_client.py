@@ -1,9 +1,10 @@
 import os
 import wave
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Any, Optional
 from google import genai
 from google.genai import types
 from db.models import Character
+from pydantic import BaseModel
 
 class GeminiAudioClient:
     def __init__(self):
@@ -85,3 +86,44 @@ class GeminiAudioClient:
             wf.setsampwidth(sample_width)
             wf.setframerate(rate)
             wf.writeframes(pcm_data)
+
+class ExtractedLine(BaseModel):
+    character_id: Optional[str]
+    text: str
+    prompt_override: Optional[str] = None
+    language_override: Optional[str] = None
+
+class GeminiTextClient:
+    def __init__(self):
+        self.client = genai.Client()
+        
+    def extract_script_from_text(self, raw_text: str, characters: List[Character]) -> List[ExtractedLine]:
+        """
+        Uses Gemini 3.5 Flash to automatically extract a script from raw text.
+        """
+        prompt_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "prompts", "script_extractor.md")
+        with open(prompt_path, "r", encoding="utf-8") as f:
+            system_instruction = f.read()
+            
+        char_list_str = "\n".join([f"- ID: {c.id}, Name: {c.name}, Role/Voice: {c.prompt_style or 'Default'}" for c in characters])
+        
+        user_prompt = f"CHARACTERS:\n{char_list_str}\n\nRAW_TEXT:\n{raw_text}"
+        
+        response = self.client.models.generate_content(
+            model="gemini-3.5-flash",
+            contents=user_prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                response_mime_type="application/json",
+                response_schema=list[ExtractedLine],
+            )
+        )
+        
+        import json
+        
+        try:
+            data = json.loads(response.text)
+            lines = [ExtractedLine(**item) for item in data]
+            return lines
+        except Exception as e:
+            raise RuntimeError(f"Failed to parse Gemini 3.5 Flash output: {e}\nRaw response: {response.text}")

@@ -6,8 +6,13 @@ import uuid
 
 from db.database import get_session
 from db.models import Scene, SceneLine, Project
+from core.gemini_client import GeminiTextClient
 
 router = APIRouter()
+
+class GenerateFromTextRequest(BaseModel):
+    title: str
+    raw_text: str
 
 class SceneLineCreate(BaseModel):
     character_id: Optional[str] = None
@@ -83,6 +88,38 @@ def create_scene(project_id: str, scene_in: SceneCreate, session: Session = Depe
     session.commit()
     session.refresh(scene)
     return scene
+
+@router.post("/projects/{project_id}/scenes/generate-from-text", response_model=SceneDetailResponse)
+def generate_scene_from_text(project_id: str, request: GenerateFromTextRequest, session: Session = Depends(get_session)):
+    """Automatically extracts script from raw text using Gemini 3.5 Flash and creates a scene."""
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+        
+    characters = project.characters
+    
+    text_client = GeminiTextClient()
+    try:
+        extracted_lines = text_client.extract_script_from_text(request.raw_text, characters)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+        
+    # Convert ExtractedLine to SceneLineCreate
+    scene_lines = []
+    for line in extracted_lines:
+        scene_lines.append(SceneLineCreate(
+            character_id=line.character_id,
+            text=line.text,
+            prompt_override=line.prompt_override,
+            language_override=line.language_override
+        ))
+        
+    scene_in = SceneCreate(
+        title=request.title,
+        lines=scene_lines
+    )
+    
+    return create_scene(project_id, scene_in, session)
 
 @router.get("/scenes/{scene_id}", response_model=SceneDetailResponse)
 def get_scene(scene_id: str, session: Session = Depends(get_session)):

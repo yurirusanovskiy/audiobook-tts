@@ -5,7 +5,10 @@ BASE_URL = "http://localhost:8000/api/v1"
 def print_result(name, res):
     print(f"--- {name} ---")
     print(f"Status: {res.status_code}")
-    print(f"Response: {res.json()}")
+    try:
+        print(f"Response: {res.json()}")
+    except requests.exceptions.JSONDecodeError:
+        print(f"Response (Raw): {res.text}")
     print("-" * 30 + "\n")
 
 def test_characters():
@@ -166,9 +169,39 @@ def test_projects_and_processing():
     # 7. Cleanup
     requests.delete(f"{BASE_URL}/projects/test_book_1") # Cascade deletes scenes and lines
     requests.delete(f"{BASE_URL}/projects/test_book_1/characters/test_jean")
-    # We'd delete language profiles, but deleting the character deletes them if cascaded.
-    # We didn't set cascade in SQLModel but it's fine for now, we'll just delete the character.
     requests.delete(f"{BASE_URL}/characters/test_jean")
+
+def test_ai_script_extractor():
+    print("=== Testing AI Script Extractor (Phase 5) ===")
+    print("Note: This requires a valid GEMINI_API_KEY to succeed.")
+    
+    # 1. Create a Project and some Characters
+    requests.post(f"{BASE_URL}/projects/", json={"id": "ai_book_1", "title": "AI Test", "language_code": "ru-RU"})
+    requests.post(f"{BASE_URL}/characters/", json={"id": "ai_alice", "name": "Alice", "voice_id": "Aoede"})
+    requests.post(f"{BASE_URL}/characters/", json={"id": "ai_bob", "name": "Bob", "voice_id": "Puck"})
+    
+    requests.post(f"{BASE_URL}/projects/ai_book_1/characters/ai_alice")
+    requests.post(f"{BASE_URL}/projects/ai_book_1/characters/ai_bob")
+    
+    # 2. Test generate-from-text endpoint
+    raw_text = """
+    Alice walked into the room, looking pale. 
+    "Did you see the ghost, Bob?" she whispered nervously.
+    Bob laughed out loud. "Ghosts aren't real, Alice! Stop acting like a child."
+    """
+    
+    generate_data = {
+        "title": "Chapter 1: The Ghost",
+        "raw_text": raw_text
+    }
+    
+    res = requests.post(f"{BASE_URL}/projects/ai_book_1/scenes/generate-from-text", json=generate_data)
+    print_result("TEST AI Script Extractor", res)
+    
+    # 3. Cleanup
+    requests.delete(f"{BASE_URL}/projects/ai_book_1")
+    requests.delete(f"{BASE_URL}/characters/ai_alice")
+    requests.delete(f"{BASE_URL}/characters/ai_bob")
 
 if __name__ == "__main__":
     try:
@@ -177,5 +210,6 @@ if __name__ == "__main__":
         test_characters()
         test_dictionary()
         test_projects_and_processing()
+        test_ai_script_extractor()
     except requests.exceptions.ConnectionError:
         print("Error: FastAPI server is not running on http://localhost:8000")
