@@ -1,22 +1,25 @@
 import os
 from fastapi import APIRouter, Depends, HTTPException
-from sqlmodel import Session
-from typing import List
+from sqlmodel import Session, select
+from typing import List, Dict, Optional
 from pydantic import BaseModel
 from db.database import get_session
-from db.models import Character
+from db.models import Character, Project, ProjectCharacterLink
 from core.preprocessor import PreprocessorFactory
 from core.gemini_client import GeminiAudioClient
+from db.crud import get_dictionary_for_language
 
 router = APIRouter(prefix="/processing", tags=["Processing"])
 
 class SceneLine(BaseModel):
     character_id: str
     text: str
+    language_override: Optional[str] = None
+    prompt_override: Optional[str] = None
 
 class ProcessSceneRequest(BaseModel):
     scene_id: str
-    language_code: str = "ru-RU"
+    project_id: str
     lines: List[SceneLine]
 
 class ProcessSceneResponse(BaseModel):
@@ -32,7 +35,67 @@ class PreprocessOnlyResponse(BaseModel):
     scene_id: str
     processed_lines: List[ProcessedLine]
 
-from db.crud import get_dictionary_for_language
+def _process_lines(request: ProcessSceneRequest, session: Session):
+    from db.models import CharacterLanguageProfile
+    from typing import Optional
+    
+    project = session.get(Project, request.project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+        
+    processed_lines = []
+    script = []
+    
+    # Cache preprocessors and dictionaries for this request
+    preprocessors = {}
+    dictionaries = {}
+    
+    for line in request.lines:
+        char = session.get(Character, line.character_id)
+        if not char:
+            raise HTTPException(status_code=404, detail=f"Character '{line.character_id}' not found in DB")
+            
+        link = session.get(ProjectCharacterLink, {"project_id": request.project_id, "character_id": line.character_id})
+        if not link:
+            raise HTTPException(status_code=400, detail=f"Character '{line.character_id}' is not linked to project '{request.project_id}'")
+            
+        # 1. Determine language for this line
+        lang = line.language_override if line.language_override else project.language_code
+        
+        # 2. Base Prompt
+        base_prompt = line.prompt_override if line.prompt_override else char.prompt_style
+        
+        # 3. Check for Language Profile to get Accents
+        profile = session.exec(select(CharacterLanguageProfile).where(
+            CharacterLanguageProfile.character_id == char.id,
+            CharacterLanguageProfile.language_code == lang
+        )).first()
+        
+        final_line_prompt = base_prompt or ""
+        if profile and not profile.is_native and profile.accent_description:
+            if final_line_prompt:
+                final_line_prompt += f". {profile.accent_description}"
+            else:
+                final_line_prompt = profile.accent_description
+        
+        if lang not in preprocessors:
+            try:
+                preprocessors[lang] = PreprocessorFactory.get_preprocessor(lang)
+                dictionaries[lang] = get_dictionary_for_language(session, lang)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+                
+        # Preprocess text
+        processed_text = preprocessors[lang].process(line.text, dictionaries[lang])
+        
+        processed_lines.append(ProcessedLine(
+            character_id=char.id,
+            original_text=line.text,
+            processed_text=processed_text
+        ))
+        script.append((char, processed_text, final_line_prompt))
+        
+    return project, script, processed_lines
 
 @router.post("/preprocess-only", response_model=PreprocessOnlyResponse)
 def preprocess_only(request: ProcessSceneRequest, session: Session = Depends(get_session)):
@@ -40,28 +103,7 @@ def preprocess_only(request: ProcessSceneRequest, session: Session = Depends(get
     Test endpoint to see how the text will be processed (dictionary + ML) 
     before sending it to the Gemini TTS engine.
     """
-    processed_lines = []
-    
-    try:
-        preprocessor = PreprocessorFactory.get_preprocessor(request.language_code)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-        
-    dictionary = get_dictionary_for_language(session, request.language_code)
-        
-    for line in request.lines:
-        char = session.get(Character, line.character_id)
-        if not char:
-            raise HTTPException(status_code=404, detail=f"Character '{line.character_id}' not found in DB")
-        
-        # Preprocess text
-        processed_text = preprocessor.process(line.text, dictionary)
-        
-        processed_lines.append(ProcessedLine(
-            character_id=char.id,
-            original_text=line.text,
-            processed_text=processed_text
-        ))
+    _, _, processed_lines = _process_lines(request, session)
         
     return PreprocessOnlyResponse(
         scene_id=request.scene_id,
@@ -70,37 +112,20 @@ def preprocess_only(request: ProcessSceneRequest, session: Session = Depends(get
 
 @router.post("/process-scene", response_model=ProcessSceneResponse)
 def process_scene(request: ProcessSceneRequest, session: Session = Depends(get_session)):
-    # 1. Map requested lines to DB characters and preprocess text
-    script = []
-    
-    try:
-        preprocessor = PreprocessorFactory.get_preprocessor(request.language_code)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-        
-    dictionary = get_dictionary_for_language(session, request.language_code)
-        
-    for line in request.lines:
-        char = session.get(Character, line.character_id)
-        if not char:
-            raise HTTPException(status_code=404, detail=f"Character '{line.character_id}' not found in DB")
-        
-        # Preprocess text (apply custom dictionary, ruaccent, etc.)
-        processed_text = preprocessor.process(line.text, dictionary)
-        
-        script.append((char, processed_text))
+    project, script, _ = _process_lines(request, session)
         
     # 2. Generate audio using Gemini TTS
     client = GeminiAudioClient()
     try:
-        # We save output in a public folder to serve it statically
-        output_dir = "static/audio"
+        # Save output in a project-specific folder
+        output_dir = f"static/audio/{project.id}"
+        os.makedirs(output_dir, exist_ok=True)
+        
         file_path = client.generate_scene_audio(request.scene_id, script, output_dir=output_dir)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Audio generation failed: {str(e)}")
         
     return ProcessSceneResponse(
         scene_id=request.scene_id,
-        # Create a URL path relative to the root where static files are mounted
         audio_file_url=f"/{file_path}"
     )

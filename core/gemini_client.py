@@ -10,10 +10,10 @@ class GeminiAudioClient:
         # GEMINI_API_KEY must be set in the environment
         self.client = genai.Client()
 
-    def generate_scene_audio(self, scene_id: str, script: List[Tuple[Character, str]], output_dir: str = "output") -> str:
+    def generate_scene_audio(self, scene_id: str, script: List[Tuple[Character, str, str]], output_dir: str = "output") -> str:
         """
         Generates audio for a multi-speaker scene using Gemini TTS.
-        `script` is a list of tuples: (Character, processed_text)
+        `script` is a list of tuples: (Character, processed_text, final_line_prompt)
         """
         if not script:
             raise ValueError("Empty script provided.")
@@ -22,8 +22,10 @@ class GeminiAudioClient:
         speaker_configs = []
         seen_speakers = {}
 
-        for char, text in script:
-            # Accumulate the dialogue
+        for char, text, line_prompt in script:
+            # Accumulate the dialogue with line-specific emotional/accent instructions
+            if line_prompt:
+                prompt_parts.append(f"({char.id} speaks: {line_prompt})")
             prompt_parts.append(f"{char.id}: {text}")
             
             # Keep track of unique speakers to configure their voices
@@ -47,12 +49,6 @@ class GeminiAudioClient:
         speakers_list = ", ".join(speaker_names)
         
         instructions = [f"TTS the following conversation between {speakers_list}:"]
-        
-        # Add prompt styles if any character has one
-        for char_id, char in seen_speakers.items():
-            if char.prompt_style:
-                instructions.append(f"{char_id} should speak: {char.prompt_style}")
-                
         instructions.append("\n" + "\n".join(prompt_parts))
         
         full_prompt = "\n".join(instructions)

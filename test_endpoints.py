@@ -15,10 +15,12 @@ def test_characters():
     char_data = {
         "id": "test_narrator",
         "name": "Test Narrator",
-        "language_code": "ru-RU",
         "voice_id": "Puck",
         "prompt_style": "Speak clearly"
     }
+    # Delete first if exists
+    requests.delete(f"{BASE_URL}/characters/test_narrator")
+    
     res = requests.post(f"{BASE_URL}/characters/", json=char_data)
     print_result("CREATE Character", res)
     
@@ -75,11 +77,88 @@ def test_dictionary():
     else:
         print("Failed to extract entry_id, skipping deletion tests.")
 
+def test_projects_and_processing():
+    print("=== Testing Projects & Processing API ===")
+    
+    # 1. Create Character (Jean - French guy)
+    char_data = {
+        "id": "test_jean",
+        "name": "Jean Dupont",
+        "voice_id": "Puck",
+        "prompt_style": "Speak elegantly"
+    }
+    # Clean up first if needed
+    requests.delete(f"{BASE_URL}/characters/test_jean")
+    
+    res = requests.post(f"{BASE_URL}/characters/", json=char_data)
+    print_result("CREATE Character (Jean)", res)
+    
+    # 1.5 Create Language Profiles
+    # Native French
+    prof_fr = {
+        "language_code": "fr-FR",
+        "is_native": True
+    }
+    requests.post(f"{BASE_URL}/characters/test_jean/language-profiles/", json=prof_fr)
+    
+    # Russian with French Accent
+    prof_ru = {
+        "language_code": "ru-RU",
+        "is_native": False,
+        "accent_description": "Speaks Russian with a heavy French accent, rolling his R's"
+    }
+    requests.post(f"{BASE_URL}/characters/test_jean/language-profiles/", json=prof_ru)
+    print("Created Language Profiles for Jean")
+    
+    # 2. Create Project (Russian book)
+    project_data = {
+        "id": "test_book_1",
+        "title": "Russian Book with French Guest",
+        "language_code": "ru-RU"
+    }
+    requests.post(f"{BASE_URL}/projects/", json=project_data) # Ignore if exists
+    print("CREATE Project")
+    
+    # 3. Link Character to Project
+    requests.post(f"{BASE_URL}/projects/test_book_1/characters/test_jean")
+    print("LINK Character to Project")
+    
+    # 4. Test Preprocessing
+    process_data = {
+        "scene_id": "scene_01",
+        "project_id": "test_book_1",
+        "lines": [
+            {
+                "character_id": "test_jean",
+                "text": "Здравствуйте, меня зовут Жан." # Russian (should append accent)
+            },
+            {
+                "character_id": "test_jean",
+                "text": "Bonjour tout le monde!",
+                "language_override": "fr-FR" # French override (native, no accent)
+            },
+            {
+                "character_id": "test_jean",
+                "text": "И я хочу кушать.",
+                "prompt_override": "Whisper" # Should combine whisper + French accent
+            }
+        ]
+    }
+    res = requests.post(f"{BASE_URL}/processing/preprocess-only", json=process_data)
+    print_result("TEST Preprocessing (Accents & Overrides)", res)
+    
+    # 5. Cleanup
+    requests.delete(f"{BASE_URL}/projects/test_book_1/characters/test_jean")
+    # We'd delete language profiles, but deleting the character deletes them if cascaded.
+    # We didn't set cascade in SQLModel but it's fine for now, we'll just delete the character.
+    requests.delete(f"{BASE_URL}/characters/test_jean")
+
 if __name__ == "__main__":
     try:
         # Check if server is up
         requests.get("http://localhost:8000/")
         test_characters()
         test_dictionary()
+        test_projects_and_processing()
     except requests.exceptions.ConnectionError:
         print("Error: FastAPI server is not running on http://localhost:8000")
