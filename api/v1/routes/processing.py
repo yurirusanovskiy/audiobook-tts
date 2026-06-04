@@ -19,6 +19,8 @@ class SceneLine(BaseModel):
 
 class ProcessSceneRequest(BaseModel):
     scene_id: str
+
+class PreprocessRequest(BaseModel):
     project_id: str
     lines: List[SceneLine]
 
@@ -35,11 +37,11 @@ class PreprocessOnlyResponse(BaseModel):
     scene_id: str
     processed_lines: List[ProcessedLine]
 
-def _process_lines(request: ProcessSceneRequest, session: Session):
+def _process_lines(project_id: str, lines, session: Session):
     from db.models import CharacterLanguageProfile
     from typing import Optional
     
-    project = session.get(Project, request.project_id)
+    project = session.get(Project, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
         
@@ -50,14 +52,18 @@ def _process_lines(request: ProcessSceneRequest, session: Session):
     preprocessors = {}
     dictionaries = {}
     
-    for line in request.lines:
+    for line in lines:
+        if line.character_id is None:
+            # Handle narrator/unassigned lines - skip TTS for now or assign default
+            continue
+            
         char = session.get(Character, line.character_id)
         if not char:
             raise HTTPException(status_code=404, detail=f"Character '{line.character_id}' not found in DB")
             
-        link = session.get(ProjectCharacterLink, {"project_id": request.project_id, "character_id": line.character_id})
+        link = session.get(ProjectCharacterLink, {"project_id": project_id, "character_id": line.character_id})
         if not link:
-            raise HTTPException(status_code=400, detail=f"Character '{line.character_id}' is not linked to project '{request.project_id}'")
+            raise HTTPException(status_code=400, detail=f"Character '{line.character_id}' is not linked to project '{project_id}'")
             
         # 1. Determine language for this line
         lang = line.language_override if line.language_override else project.language_code
@@ -98,21 +104,31 @@ def _process_lines(request: ProcessSceneRequest, session: Session):
     return project, script, processed_lines
 
 @router.post("/preprocess-only", response_model=PreprocessOnlyResponse)
-def preprocess_only(request: ProcessSceneRequest, session: Session = Depends(get_session)):
+def preprocess_only(request: PreprocessRequest, session: Session = Depends(get_session)):
     """
     Test endpoint to see how the text will be processed (dictionary + ML) 
     before sending it to the Gemini TTS engine.
     """
-    _, _, processed_lines = _process_lines(request, session)
+    _, _, processed_lines = _process_lines(request.project_id, request.lines, session)
         
     return PreprocessOnlyResponse(
-        scene_id=request.scene_id,
+        scene_id="preview",
         processed_lines=processed_lines
     )
 
 @router.post("/process-scene", response_model=ProcessSceneResponse)
 def process_scene(request: ProcessSceneRequest, session: Session = Depends(get_session)):
-    project, script, _ = _process_lines(request, session)
+    from db.models import Scene
+    
+    scene = session.get(Scene, request.scene_id)
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+        
+    lines = sorted(scene.lines, key=lambda l: l.order_index)
+    if not lines:
+        raise HTTPException(status_code=400, detail="Scene has no lines to process")
+        
+    project, script, _ = _process_lines(scene.project_id, lines, session)
         
     # 2. Generate audio using Gemini TTS
     client = GeminiAudioClient()
@@ -122,6 +138,10 @@ def process_scene(request: ProcessSceneRequest, session: Session = Depends(get_s
         os.makedirs(output_dir, exist_ok=True)
         
         file_path = client.generate_scene_audio(request.scene_id, script, output_dir=output_dir)
+        
+        # Save the audio url back to the Scene
+        scene.audio_url = f"/{file_path}"
+        session.commit()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Audio generation failed: {str(e)}")
         

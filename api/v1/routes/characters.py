@@ -1,29 +1,59 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, select
-from typing import List
+from typing import List, Optional
+from pydantic import BaseModel
 from db.database import get_session
 from db.models import Character, CharacterLanguageProfile
 
+class CharacterResponse(BaseModel):
+    id: str
+    name: str
+    voice_id: str
+    prompt_style: Optional[str] = None
+    language_profiles: List[CharacterLanguageProfile] = []
+
 router = APIRouter(prefix="/characters", tags=["Characters"])
 
-@router.get("/", response_model=List[Character])
+@router.get("/", response_model=List[CharacterResponse])
 def read_characters(session: Session = Depends(get_session)):
     characters = session.exec(select(Character)).all()
     return characters
 
-@router.get("/{character_id}", response_model=Character)
+@router.get("/{character_id}", response_model=CharacterResponse)
 def read_character(character_id: str, session: Session = Depends(get_session)):
     character = session.get(Character, character_id)
     if not character:
         raise HTTPException(status_code=404, detail="Character not found")
     return character
 
-@router.post("/", response_model=Character)
+@router.post("/", response_model=CharacterResponse)
 def create_character(character: Character, session: Session = Depends(get_session)):
     db_char = session.get(Character, character.id)
     if db_char:
         raise HTTPException(status_code=400, detail="Character with this ID already exists")
     session.add(character)
+    session.commit()
+    session.refresh(character)
+    return character
+
+class CharacterUpdate(BaseModel):
+    name: Optional[str] = None
+    voice_id: Optional[str] = None
+    prompt_style: Optional[str] = None
+
+@router.put("/{character_id}", response_model=CharacterResponse)
+def update_character(character_id: str, char_in: CharacterUpdate, session: Session = Depends(get_session)):
+    character = session.get(Character, character_id)
+    if not character:
+        raise HTTPException(status_code=404, detail="Character not found")
+    
+    if char_in.name is not None:
+        character.name = char_in.name
+    if char_in.voice_id is not None:
+        character.voice_id = char_in.voice_id
+    if char_in.prompt_style is not None:
+        character.prompt_style = char_in.prompt_style
+        
     session.commit()
     session.refresh(character)
     return character

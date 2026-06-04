@@ -123,10 +123,9 @@ def test_projects_and_processing():
     requests.post(f"{BASE_URL}/projects/test_book_1/characters/test_jean")
     print("LINK Character to Project")
     
-    # 4. Test Preprocessing
-    process_data = {
-        "scene_id": "scene_01",
-        "project_id": "test_book_1",
+    # 4. Test Scenes API
+    scene_data = {
+        "title": "Chapter 1",
         "lines": [
             {
                 "character_id": "test_jean",
@@ -144,10 +143,28 @@ def test_projects_and_processing():
             }
         ]
     }
+    res = requests.post(f"{BASE_URL}/projects/test_book_1/scenes", json=scene_data)
+    print_result("CREATE Scene", res)
+    scene_id = res.json().get("id")
+    
+    # 5. Test Preprocessing
+    process_data = {
+        "project_id": "test_book_1",
+        "lines": scene_data["lines"]
+    }
     res = requests.post(f"{BASE_URL}/processing/preprocess-only", json=process_data)
     print_result("TEST Preprocessing (Accents & Overrides)", res)
     
-    # 5. Cleanup
+    # 6. Test Process Scene (Will fail if no API key, but we want to see it reach the endpoint)
+    if scene_id:
+        process_scene_data = {
+            "scene_id": scene_id
+        }
+        res = requests.post(f"{BASE_URL}/processing/process-scene", json=process_scene_data)
+        print_result("TEST Process Scene", res)
+    
+    # 7. Cleanup
+    requests.delete(f"{BASE_URL}/projects/test_book_1") # Cascade deletes scenes and lines
     requests.delete(f"{BASE_URL}/projects/test_book_1/characters/test_jean")
     # We'd delete language profiles, but deleting the character deletes them if cascaded.
     # We didn't set cascade in SQLModel but it's fine for now, we'll just delete the character.

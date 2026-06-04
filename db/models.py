@@ -13,6 +13,29 @@ class Project(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     
     characters: List["Character"] = Relationship(back_populates="projects", link_model=ProjectCharacterLink)
+    scenes: List["Scene"] = Relationship(back_populates="project", cascade_delete=True)
+
+class Scene(SQLModel, table=True):
+    id: str = Field(primary_key=True, description="Unique identifier for the scene, e.g., 'scene_01'")
+    project_id: str = Field(foreign_key="project.id", index=True)
+    title: Optional[str] = Field(default=None, description="Human-readable title of the scene/chapter")
+    order_index: int = Field(default=0, description="Order of the scene within the project")
+    audio_url: Optional[str] = Field(default=None, description="Path to the generated audio file")
+    
+    project: Project = Relationship(back_populates="scenes")
+    lines: List["SceneLine"] = Relationship(back_populates="scene", cascade_delete=True)
+
+class SceneLine(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    scene_id: str = Field(foreign_key="scene.id", index=True)
+    character_id: Optional[str] = Field(foreign_key="character.id", index=True, description="Character speaking, null if narrator")
+    text: str = Field(description="The text to be spoken")
+    language_override: Optional[str] = Field(default=None, description="Override the language for this specific line")
+    prompt_override: Optional[str] = Field(default=None, description="Override the acting prompt for this specific line")
+    order_index: int = Field(default=0, description="Order of the line within the scene")
+    
+    scene: Scene = Relationship(back_populates="lines")
+    character: Optional["Character"] = Relationship(back_populates="lines")
 
 class CharacterLanguageProfile(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -37,6 +60,7 @@ class Character(SQLModel, table=True):
     
     projects: List[Project] = Relationship(back_populates="characters", link_model=ProjectCharacterLink)
     language_profiles: List[CharacterLanguageProfile] = Relationship(back_populates="character")
+    lines: List[SceneLine] = Relationship(back_populates="character")
 
 class DictionaryEntry(SQLModel, table=True):
     id: Optional[int] = Field(
