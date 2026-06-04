@@ -10,21 +10,9 @@ class Character(SQLModel, table=True):
         index=True, 
         description="Display name of the character for UI/Logs"
     )
-    language_code: str = Field(
-        index=True, 
-        description="Language locale of the voice (e.g., 'ru-RU', 'en-US', 'ro-RO')"
-    )
-    voice_id: str = Field(
-        description="Google TTS voice name, e.g., 'en-US-Journey-F'"
-    )
-    pitch: str = Field(
-        default="+0st", 
-        description="Voice pitch adjustment in semitones (e.g., '+2st', '-3st') to create kids or giants"
-    )
-    speed: float = Field(
-        default=1.0, 
-        description="Voice speed adjustment (0.5 to 2.0)"
-    )
+    language_code: str = Field(default="ru-RU", description="Locale language code, e.g. 'ru-RU' or 'en-US'")
+    voice_id: str = Field(description="Gemini prebuilt voice name, e.g. 'Kore' or 'Puck'")
+    prompt_style: Optional[str] = Field(default=None, description="Natural language instructions for the TTS model, e.g. 'Read fast and cheerfully'")
 
 class DictionaryEntry(SQLModel, table=True):
     id: Optional[int] = Field(

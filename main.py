@@ -12,12 +12,21 @@ async def lifespan(app: FastAPI):
     # This runs on shutdown
     print("Shutting down...")
 
+from fastapi.staticfiles import StaticFiles
+from api.v1.router import v1_router
+
 app = FastAPI(
     title="Audiobook TTS Engine",
     description="API for managing audiobook characters, dictionaries, and generating TTS audio.",
     version="1.0.0",
     lifespan=lifespan
 )
+
+# Mount static directory for serving generated audio files
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Include API v1 routes
+app.include_router(v1_router, prefix="/api/v1")
 
 @app.get("/")
 def read_root():
