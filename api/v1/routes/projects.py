@@ -64,6 +64,83 @@ def read_project_characters(project_id: str, session: Session = Depends(get_sess
         raise HTTPException(status_code=404, detail="Project not found")
     return project.characters
 
+class DiscoverCharactersRequest(BaseModel):
+    raw_text: str
+
+class CharacterDiscoverySuggestion(BaseModel):
+    discovered_name: str
+    traits: str
+    gender: str
+    age_category: str
+    action: str  # "create_new" or "use_existing"
+    existing_character_id: Optional[str] = None
+    suggested_voice_id: Optional[str] = None
+
+@router.post("/{project_id}/characters/discover", response_model=List[CharacterDiscoverySuggestion])
+def discover_characters(project_id: str, req: DiscoverCharactersRequest, session: Session = Depends(get_session)):
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # 1. Ask Gemini to discover characters in the text
+    from core.gemini_client import GeminiTextClient
+    client = GeminiTextClient()
+    discovered_chars = client.discover_characters(req.raw_text)
+
+    # 2. Find currently used voices in this project to avoid conflicts
+    used_voices = {c.voice_id for c in project.characters}
+    available_voices = ["Puck", "Charon", "Kore", "Fenrir", "Aoede"]
+
+    suggestions = []
+    
+    for d_char in discovered_chars:
+        # Search DB for matching gender and age
+        # (Case insensitive or direct match)
+        stmt = select(Character).where(
+            Character.gender == d_char.gender,
+            Character.age_category == d_char.age_category
+        )
+        matching_chars = session.exec(stmt).all()
+        
+        suggestion = CharacterDiscoverySuggestion(
+            discovered_name=d_char.discovered_name,
+            traits=d_char.traits,
+            gender=d_char.gender,
+            age_category=d_char.age_category,
+            action="create_new"
+        )
+
+        # Try to find an existing character whose voice is not already taken by someone else in this project
+        best_match = None
+        for mc in matching_chars:
+            if mc in project.characters:
+                # Already linked, perfect! Use this.
+                best_match = mc
+                break
+            if mc.voice_id not in used_voices:
+                best_match = mc
+                break
+
+        if best_match:
+            suggestion.action = "use_existing"
+            suggestion.existing_character_id = best_match.id
+            # Also register the voice as used for subsequent characters in this loop
+            used_voices.add(best_match.voice_id)
+        else:
+            suggestion.action = "create_new"
+            # Pick a free voice
+            free_voices = [v for v in available_voices if v not in used_voices]
+            if free_voices:
+                suggestion.suggested_voice_id = free_voices[0]
+                used_voices.add(free_voices[0])
+            else:
+                # Fallback if we run out of unique voices
+                suggestion.suggested_voice_id = "Kore"
+
+        suggestions.append(suggestion)
+
+    return suggestions
+
 @router.post("/{project_id}/characters/{character_id}")
 def link_character_to_project(project_id: str, character_id: str, session: Session = Depends(get_session)):
     project = session.get(Project, project_id)
@@ -92,3 +169,5 @@ def unlink_character_from_project(project_id: str, character_id: str, session: S
     session.delete(link)
     session.commit()
     return {"ok": True, "message": "Character unlinked from project"}
+
+

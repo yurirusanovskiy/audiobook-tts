@@ -10,6 +10,8 @@ class CharacterResponse(BaseModel):
     name: str
     voice_id: str
     prompt_style: Optional[str] = None
+    gender: Optional[str] = None
+    age_category: Optional[str] = None
     language_profiles: List[CharacterLanguageProfile] = []
 
 router = APIRouter(prefix="/characters", tags=["Characters"])
@@ -40,6 +42,8 @@ class CharacterUpdate(BaseModel):
     name: Optional[str] = None
     voice_id: Optional[str] = None
     prompt_style: Optional[str] = None
+    gender: Optional[str] = None
+    age_category: Optional[str] = None
 
 @router.put("/{character_id}", response_model=CharacterResponse)
 def update_character(character_id: str, char_in: CharacterUpdate, session: Session = Depends(get_session)):
@@ -53,6 +57,10 @@ def update_character(character_id: str, char_in: CharacterUpdate, session: Sessi
         character.voice_id = char_in.voice_id
     if char_in.prompt_style is not None:
         character.prompt_style = char_in.prompt_style
+    if char_in.gender is not None:
+        character.gender = char_in.gender
+    if char_in.age_category is not None:
+        character.age_category = char_in.age_category
         
     session.commit()
     session.refresh(character)

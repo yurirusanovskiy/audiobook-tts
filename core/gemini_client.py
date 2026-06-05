@@ -93,6 +93,12 @@ class ExtractedLine(BaseModel):
     prompt_override: Optional[str] = None
     language_override: Optional[str] = None
 
+class DiscoveredCharacter(BaseModel):
+    discovered_name: str
+    traits: str
+    gender: str
+    age_category: str
+
 class GeminiTextClient:
     def __init__(self):
         self.client = genai.Client()
@@ -127,3 +133,32 @@ class GeminiTextClient:
             return lines
         except Exception as e:
             raise RuntimeError(f"Failed to parse Gemini 3.5 Flash output: {e}\nRaw response: {response.text}")
+
+    def discover_characters(self, raw_text: str) -> List[DiscoveredCharacter]:
+        """
+        Uses Gemini 3.5 Flash to identify all unique characters in the text, their gender, and age.
+        """
+        prompt_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "prompts", "character_discoverer.md")
+        with open(prompt_path, "r", encoding="utf-8") as f:
+            system_instruction = f.read()
+            
+        user_prompt = f"RAW_TEXT:\n{raw_text}"
+        
+        response = self.client.models.generate_content(
+            model="gemini-3.5-flash",
+            contents=user_prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                response_mime_type="application/json",
+                response_schema=list[DiscoveredCharacter],
+            )
+        )
+        
+        import json
+        
+        try:
+            data = json.loads(response.text)
+            chars = [DiscoveredCharacter(**item) for item in data]
+            return chars
+        except Exception as e:
+            raise RuntimeError(f"Failed to parse Gemini 3.5 Flash output for discovery: {e}\nRaw response: {response.text}")

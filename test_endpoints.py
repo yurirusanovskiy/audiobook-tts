@@ -203,6 +203,41 @@ def test_ai_script_extractor():
     requests.delete(f"{BASE_URL}/characters/ai_alice")
     requests.delete(f"{BASE_URL}/characters/ai_bob")
 
+def test_ai_casting_director():
+    print("=== Testing AI Casting Director (Phase 6) ===")
+    print("Note: This requires a valid GEMINI_API_KEY to succeed.")
+    
+    # 1. Create a Project and some Characters in DB
+    requests.post(f"{BASE_URL}/projects/", json={"id": "cast_book_1", "title": "Casting Test", "language_code": "ru-RU"})
+    
+    # Create an elderly male character to see if the AI suggests him
+    requests.post(f"{BASE_URL}/characters/", json={
+        "id": "old_john", 
+        "name": "Old John", 
+        "voice_id": "Charon",
+        "gender": "male",
+        "age_category": "elderly"
+    })
+    
+    # We do NOT link old_john to the project yet. The discover endpoint should suggest him.
+    
+    # 2. Test discover endpoint
+    raw_text = """
+    An old man slowly walked down the street. "My bones ache," he grumbled.
+    Suddenly, a young girl ran past him. "Hurry up, mister!" she laughed.
+    """
+    
+    discover_data = {
+        "raw_text": raw_text
+    }
+    
+    res = requests.post(f"{BASE_URL}/projects/cast_book_1/characters/discover", json=discover_data)
+    print_result("TEST AI Casting Director (Discover Characters)", res)
+    
+    # 3. Cleanup
+    requests.delete(f"{BASE_URL}/projects/cast_book_1")
+    requests.delete(f"{BASE_URL}/characters/old_john")
+
 if __name__ == "__main__":
     try:
         # Check if server is up
@@ -211,5 +246,6 @@ if __name__ == "__main__":
         test_dictionary()
         test_projects_and_processing()
         test_ai_script_extractor()
+        test_ai_casting_director()
     except requests.exceptions.ConnectionError:
         print("Error: FastAPI server is not running on http://localhost:8000")
