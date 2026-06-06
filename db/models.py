@@ -21,6 +21,7 @@ class Scene(SQLModel, table=True):
     title: Optional[str] = Field(default=None, description="Human-readable title of the scene/chapter")
     order_index: int = Field(default=0, description="Order of the scene within the project")
     audio_url: Optional[str] = Field(default=None, description="Path to the generated audio file")
+    raw_text: Optional[str] = Field(default=None, description="Raw text chunk for this scene before script extraction")
     
     project: Project = Relationship(back_populates="scenes")
     lines: List["SceneLine"] = Relationship(back_populates="scene", cascade_delete=True)

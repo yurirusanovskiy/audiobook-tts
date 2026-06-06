@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlmodel import Session, select
 from typing import List, Optional
 from pydantic import BaseModel
 from db.database import get_session
-from db.models import Project, Character, ProjectCharacterLink
+from db.models import Project, Character, ProjectCharacterLink, Scene
+import uuid
+from core.text_chunker import chunk_text
 
 router = APIRouter(prefix="/projects", tags=["Projects"])
 
@@ -169,5 +171,49 @@ def unlink_character_from_project(project_id: str, character_id: str, session: S
     session.delete(link)
     session.commit()
     return {"ok": True, "message": "Character unlinked from project"}
+
+@router.post("/{project_id}/upload-book")
+async def upload_book(project_id: str, file: UploadFile = File(...), session: Session = Depends(get_session)):
+    """Uploads a .txt file, chunks it, and creates Scenes."""
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+        
+    if not file.filename.endswith('.txt'):
+        raise HTTPException(status_code=400, detail="Only .txt files are supported currently")
+        
+    content_bytes = await file.read()
+    try:
+        raw_text = content_bytes.decode('utf-8')
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="File must be UTF-8 encoded text")
+        
+    from core.ml_text_chunker import chunk_text_semantically
+    chunks = chunk_text_semantically(raw_text, max_chars=7000)
+    
+    # Calculate next order index for scenes
+    existing_scenes = session.exec(select(Scene).where(Scene.project_id == project_id)).all()
+    next_order = max([s.order_index for s in existing_scenes] + [-1]) + 1
+    
+    created_count = 0
+    for chunk in chunks:
+        scene_id = f"scene_{uuid.uuid4().hex[:8]}"
+        scene = Scene(
+            id=scene_id,
+            project_id=project_id,
+            title=f"Scene {next_order + created_count}",
+            order_index=next_order + created_count,
+            raw_text=chunk
+        )
+        session.add(scene)
+        created_count += 1
+        
+    session.commit()
+    
+    return {
+        "ok": True, 
+        "message": f"Successfully chunked book into {created_count} scenes.",
+        "scenes_created": created_count
+    }
 
 
