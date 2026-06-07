@@ -32,3 +32,18 @@ def delete_dictionary_entry(entry_id: int, session: Session = Depends(get_sessio
     session.delete(entry)
     session.commit()
     return {"ok": True}
+
+@router.put("/{entry_id}", response_model=DictionaryEntry)
+def update_dictionary_entry(entry_id: int, updated_data: DictionaryEntry, session: Session = Depends(get_session)):
+    entry = session.get(DictionaryEntry, entry_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Dictionary entry not found")
+    
+    entry.word = updated_data.word
+    entry.phonetic_replacement = updated_data.phonetic_replacement
+    entry.language = updated_data.language
+    
+    session.add(entry)
+    session.commit()
+    session.refresh(entry)
+    return entry

@@ -13,6 +13,7 @@ async def lifespan(app: FastAPI):
     print("Shutting down...")
 
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from api.v1.router import v1_router
 
 app = FastAPI(
@@ -20,6 +21,15 @@ app = FastAPI(
     description="API for managing audiobook characters, dictionaries, and generating TTS audio.",
     version="1.0.0",
     lifespan=lifespan
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Mount static directory for serving generated audio files
