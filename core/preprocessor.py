@@ -87,7 +87,13 @@ class RussianPreprocessor(BasePreprocessor):
         accentuator = self._get_accentuator()
         ml_processed_text = accentuator.process_all(protected_text)
 
-        # 3. Restoration phase (Apply user phonetics)
+        # 3. Convert ruaccent '+' to Unicode Combining Acute Accent (\u0301)
+        # ruaccent places '+' before the stressed vowel (e.g., "з+амок").
+        # We need to place '\u0301' after the vowel (e.g., "за\u0301мок").
+        # We replace '+' followed by any character, with that character followed by '\u0301'.
+        ml_processed_text = re.sub(r'\+(.)', r'\1\u0301', ml_processed_text)
+
+        # 4. Restoration phase (Apply user phonetics)
         final_text = ml_processed_text
         for placeholder, replacement in placeholder_map.items():
             final_text = final_text.replace(placeholder, replacement)
