@@ -11,9 +11,9 @@ class GeminiAudioClient:
         # GEMINI_API_KEY must be set in the environment
         self.client = genai.Client()
 
-    def generate_scene_audio(self, scene_id: str, script: List[Tuple[Character, str, str]], output_dir: str = "output") -> str:
+    def generate_audio_chunk(self, file_path: str, script: List[Tuple[Character, str, str]]) -> str:
         """
-        Generates audio for a multi-speaker scene using Gemini TTS.
+        Generates audio for a multi-speaker chunk using Gemini TTS.
         `script` is a list of tuples: (Character, processed_text, final_line_prompt)
         """
         if not script:
@@ -55,36 +55,63 @@ class GeminiAudioClient:
         for char_id, char_obj in seen_speakers.items():
             if char_obj.prompt_style:
                 instructions.append(f"Note on {char_id}'s voice: {char_obj.prompt_style}")
+            if char_obj.pitch_override:
+                instructions.append(f"Note on {char_id}'s pitch: Speak in a {char_obj.pitch_override} pitch.")
                 
         instructions.append("\n" + "\n".join(prompt_parts))
         
         full_prompt = "\n".join(instructions)
 
-        # Gemini API call
-        response = self.client.models.generate_content(
-            model="gemini-3.1-flash-tts-preview",
-            contents=full_prompt,
-            config=types.GenerateContentConfig(
-                response_modalities=["AUDIO"],
-                speech_config=types.SpeechConfig(
-                    multi_speaker_voice_config=types.MultiSpeakerVoiceConfig(
-                        speaker_voice_configs=speaker_configs
-                    )
-                ),
+        # Handle Gemini API limits: multi-speaker only supports EXACTLY 2 voices.
+        if len(speaker_configs) == 1:
+            speech_config = types.SpeechConfig(
+                voice_config=speaker_configs[0].voice_config
             )
-        )
+        else:
+            # API strictly requires 2
+            speech_config = types.SpeechConfig(
+                multi_speaker_voice_config=types.MultiSpeakerVoiceConfig(
+                    speaker_voice_configs=speaker_configs[:2]
+                )
+            )
+
+        import time
+        max_retries = 3
+        base_delay = 2
+        response = None
+        
+        for attempt in range(max_retries):
+            try:
+                # Gemini API call
+                response = self.client.models.generate_content(
+                    model="gemini-3.1-flash-tts-preview",
+                    contents=full_prompt,
+                    config=types.GenerateContentConfig(
+                        response_modalities=["AUDIO"],
+                        speech_config=speech_config,
+                    )
+                )
+                break  # Success
+            except Exception as e:
+                print(f"Gemini API Error (Attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt == max_retries - 1:
+                    raise RuntimeError(f"Gemini API failed after {max_retries} attempts: {str(e)}") from e
+                time.sleep(base_delay)
+                base_delay *= 2
 
         try:
             data = response.candidates[0].content.parts[0].inline_data.data
         except (IndexError, AttributeError) as e:
             raise RuntimeError(f"Failed to extract audio data from Gemini response. Response: {response}") from e
 
-        # Save to wave file
-        os.makedirs(output_dir, exist_ok=True)
-        file_name = os.path.join(output_dir, f"{scene_id}.wav")
-        self._save_wave_file(file_name, data)
+        # Save to wave file and normalize
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        self._save_wave_file(file_path, data)
         
-        return file_name
+        from core.audio_utils import normalize_wav
+        normalize_wav(file_path)
+        
+        return file_path
 
     def _save_wave_file(self, filename: str, pcm_data: bytes, channels: int = 1, rate: int = 24000, sample_width: int = 2):
         with wave.open(filename, "wb") as wf:

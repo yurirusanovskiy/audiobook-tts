@@ -255,7 +255,7 @@ async def upload_book(project_id: str, file: UploadFile = File(...), session: Se
         scene = Scene(
             id=scene_id,
             project_id=project_id,
-            title=f"Scene {next_order + created_count}",
+            title=f"Scene {next_order + created_count + 1}",
             order_index=next_order + created_count,
             raw_text=chunk
         )

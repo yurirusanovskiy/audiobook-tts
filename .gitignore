@@ -21,3 +21,4 @@ data/output_audio/
 
 # OS
 .DS_Store
+static/audio/

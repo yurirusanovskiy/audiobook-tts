@@ -54,6 +54,33 @@ class RussianPreprocessor(BasePreprocessor):
         if self._accentuator is None:
             print("[RussianPreprocessor] Loading ruaccent model...")
             from ruaccent import RUAccent
+            import ruaccent.accent_model
+            import numpy as np
+            
+            # Monkey-patch AccentModel.put_accent to fix missing token_type_ids in ONNX input
+            original_put_accent = ruaccent.accent_model.AccentModel.put_accent
+            def patched_put_accent(self_obj, word):
+                def softmax(x):
+                    e_x = np.exp(x - np.max(x))
+                    return e_x / e_x.sum(axis=-1, keepdims=True)
+                lower_word = word.lower()
+                inputs = self_obj.tokenizer(lower_word, return_tensors="np")
+                inputs = {k: v.astype(np.int64) for k, v in inputs.items()}
+                if "token_type_ids" not in inputs:
+                    inputs["token_type_ids"] = np.zeros_like(inputs["input_ids"])
+                outputs = self_obj.session.run(None, inputs)
+                output_names = {output_key.name: idx for idx, output_key in enumerate(self_obj.session.get_outputs())}
+                logits = outputs[output_names["logits"]]
+                probabilities = softmax(logits)
+                scores = np.max(probabilities, axis=-1)[0]
+                labels = np.argmax(logits, axis=-1)[0]
+                pred_with_scores = [{'label': self_obj.id2label[str(label)], 'score': float(score)} 
+                                    for label, score in zip(labels, scores)]
+                stressed_word = self_obj.render_stress(word, pred_with_scores)
+                return stressed_word
+
+            ruaccent.accent_model.AccentModel.put_accent = patched_put_accent
+
             # Initialize the model (using default or lightweight parameters depending on requirements)
             self._accentuator = RUAccent()
             self._accentuator.load(omograph_model_size='big_poetry', use_dictionary=True)

@@ -72,6 +72,7 @@ class Character(SQLModel, table=True):
     )
     voice_id: str = Field(description="Gemini prebuilt voice name, e.g. 'Kore' or 'Puck'")
     prompt_style: Optional[str] = Field(default=None, description="Natural language instructions for the TTS model, e.g. 'Read fast and cheerfully'")
+    pitch_override: Optional[str] = Field(default=None, description="Pitch modification instruction, e.g. 'High', 'Low', 'Deep', 'Squeaky'")
     gender: Optional[str] = Field(default=None, description="Gender of the character: 'male' or 'female'")
     age_category: Optional[str] = Field(default=None, description="Age category: 'child', 'young', 'adult', 'elderly'")
     
