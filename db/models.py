@@ -75,6 +75,7 @@ class Character(SQLModel, table=True):
     pitch_override: Optional[str] = Field(default=None, description="Pitch modification instruction, e.g. 'High', 'Low', 'Deep', 'Squeaky'")
     gender: Optional[str] = Field(default=None, description="Gender of the character: 'male' or 'female'")
     age_category: Optional[str] = Field(default=None, description="Age category: 'child', 'young', 'adult', 'elderly'")
+    sample_audio_url: Optional[str] = Field(default=None, description="URL to the generated voice sample audio")
     
     projects: List[Project] = Relationship(back_populates="characters", link_model=ProjectCharacterLink)
     language_profiles: List[CharacterLanguageProfile] = Relationship(back_populates="character")

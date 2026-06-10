@@ -70,21 +70,31 @@ def _process_lines(project_id: str, lines, session: Session):
             # 1. Determine language for this line
             lang = line.language_override if line.language_override else project.language_code
             
-            # 2. Base Prompt
-            base_prompt = line.prompt_override if line.prompt_override else char.prompt_style
-            
-            # 3. Check for Language Profile to get Accents
+            # Check for Language Profile to get Accents
             profile = session.exec(select(CharacterLanguageProfile).where(
                 CharacterLanguageProfile.character_id == char.id,
-                CharacterLanguageProfile.language_code == lang
+                CharacterLanguageProfile.language_code.startswith(lang.split('-')[0])
             )).first()
             
-            final_line_prompt = base_prompt or ""
+            # Build final prompt
+            parts = []
+            if getattr(char, 'prompt_style', None):
+                parts.append(f"Voice style: {char.prompt_style}")
+                
+            if line.prompt_override:
+                parts.append(f"Expression: {line.prompt_override}")
+                
+            if getattr(char, 'age_category', None) or getattr(char, 'gender', None):
+                traits = [t for t in [getattr(char, 'age_category', None), getattr(char, 'gender', None)] if t]
+                parts.append(f"Voice traits: {', '.join(traits)}")
+                
+            if getattr(char, 'pitch_override', None):
+                parts.append(f"Voice pitch: {char.pitch_override}")
+                
             if profile and not profile.is_native and profile.accent_description:
-                if final_line_prompt:
-                    final_line_prompt += f". {profile.accent_description}"
-                else:
-                    final_line_prompt = profile.accent_description
+                parts.append(profile.accent_description)
+                
+            final_line_prompt = ". ".join(parts).strip()
         
         if lang not in preprocessors:
             try:

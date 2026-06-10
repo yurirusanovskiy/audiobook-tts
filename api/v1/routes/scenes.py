@@ -6,7 +6,7 @@ import uuid
 import os
 
 from db.database import get_session
-from db.models import Scene, SceneLine, Project, Character, DictionaryEntry, ProjectCharacterLink
+from db.models import Scene, SceneLine, Project, Character, DictionaryEntry, ProjectCharacterLink, CharacterLanguageProfile
 from core.gemini_client import GeminiTextClient, GeminiAudioClient
 from core.preprocessor import PreprocessorFactory
 
@@ -330,14 +330,41 @@ def _build_scene_chunks(scene: Scene, session: Session) -> list[list[tuple]]:
                 processed_text = preprocessor.process(line.text, dictionary)
         
         char = line.character if line.character else narrator
-        script_items.append((line, char, processed_text))
+        
+        # Build the dynamic prompt for this line/character
+        parts = []
+        if getattr(char, 'prompt_style', None):
+            parts.append(f"Voice style: {char.prompt_style}")
+            
+        if line.prompt_override:
+            parts.append(f"Expression: {line.prompt_override}")
+            
+        if getattr(char, 'age_category', None) or getattr(char, 'gender', None):
+            traits = [t for t in [getattr(char, 'age_category', None), getattr(char, 'gender', None)] if t]
+            parts.append(f"Voice traits: {', '.join(traits)}")
+            
+        if getattr(char, 'pitch_override', None):
+            parts.append(f"Voice pitch: {char.pitch_override}")
+            
+        line_lang = line.language_override if line.language_override else lang
+        prefix = line_lang.lower().split('-')[0]
+        profile = session.exec(select(CharacterLanguageProfile).where(
+            CharacterLanguageProfile.character_id == char.id,
+            CharacterLanguageProfile.language_code.startswith(prefix)
+        )).first()
+        if profile and not profile.is_native and profile.accent_description:
+            parts.append(profile.accent_description)
+            
+        final_prompt = ". ".join(parts).strip()
+        
+        script_items.append((line, char, processed_text, final_prompt))
 
     chunks = []
     current_chunk = []
     current_speakers = set()
 
     for item in script_items:
-        line, char, processed_text = item
+        line, char, processed_text, final_prompt = item
         
         if char.id == "narrator":
             if current_chunk and "narrator" not in current_speakers:
@@ -392,10 +419,10 @@ def generate_audio(scene_id: str, session: Session = Depends(get_session)):
     chunk_files = []
     try:
         for idx, chunk in enumerate(chunks):
-            # Extract script items from chunk: (Character, processed_text, prompt_override)
-            script = [(item[1], item[2], item[0].prompt_override) for item in chunk]
+            # Extract script items from chunk: (Character, processed_text, final_prompt)
+            script = [(item[1], item[2], item[3]) for item in chunk]
             
-            speakers_in_chunk = sorted(list(set([c.id for _, c, _ in chunk])))
+            speakers_in_chunk = sorted(list(set([c.id for _, c, _, _ in chunk])))
             speakers_str = "_and_".join(speakers_in_chunk)
             chunk_file_path = os.path.join(scene_dir, f"{idx+1:02d}_{scene_id}_{speakers_str}.wav")
             
@@ -405,7 +432,7 @@ def generate_audio(scene_id: str, session: Session = Depends(get_session)):
             
             # Update audio_url for all lines in the chunk
             final_url = f"/{chunk_file_path}"
-            for line, char, _ in chunk:
+            for line, char, _, _ in chunk:
                 line.audio_url = final_url
                 session.add(line)
             
@@ -494,10 +521,10 @@ def generate_line_audio(scene_id: str, line_id: int, session: Session = Depends(
     scene_dir = f"static/audio/{scene_id}_stems"
     os.makedirs(scene_dir, exist_ok=True)
     
-    # Extract script items from chunk: (Character, processed_text, prompt_override)
-    script = [(item[1], item[2], item[0].prompt_override) for item in target_chunk]
+    # Extract script items from chunk: (Character, processed_text, final_prompt)
+    script = [(item[1], item[2], item[3]) for item in target_chunk]
     
-    speakers_in_chunk = sorted(list(set([c.id for _, c, _ in target_chunk])))
+    speakers_in_chunk = sorted(list(set([c.id for _, c, _, _ in target_chunk])))
     speakers_str = "_and_".join(speakers_in_chunk)
     
     # Calculate next take number based on the primary line requested
@@ -514,7 +541,7 @@ def generate_line_audio(scene_id: str, line_id: int, session: Session = Depends(
     final_url = f"/{chunk_file_path}"
     
     # Update audio_url for all lines in the chunk
-    for chunk_line, _, _ in target_chunk:
+    for chunk_line, _, _, _ in target_chunk:
         chunk_line.audio_url = final_url
         
         # We'll create for all lines in the chunk.
