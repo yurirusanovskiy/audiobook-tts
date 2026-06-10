@@ -10,7 +10,7 @@ def get_dictionary_for_language(session: Session, language_code: str) -> Dict[st
     """
     prefix = language_code.lower().split('-')[0]
     
-    statement = select(DictionaryEntry).where(DictionaryEntry.language == prefix)
+    statement = select(DictionaryEntry).where(DictionaryEntry.language.startswith(prefix))
     results = session.exec(statement).all()
     
     return {entry.word: entry.phonetic_replacement for entry in results}

@@ -308,7 +308,7 @@ def _build_scene_chunks(scene: Scene, session: Session) -> list[list[tuple]]:
 
     lang = project.language_code
     prefix = lang.lower().split('-')[0]
-    db_dict = session.exec(select(DictionaryEntry).where(DictionaryEntry.language == prefix)).all()
+    db_dict = session.exec(select(DictionaryEntry).where(DictionaryEntry.language.startswith(prefix))).all()
     dictionary = {entry.word: entry.phonetic_replacement for entry in db_dict}
     preprocessor = PreprocessorFactory.get_preprocessor(lang)
 
@@ -317,13 +317,13 @@ def _build_scene_chunks(scene: Scene, session: Session) -> list[list[tuple]]:
 
     for line in lines:
         if line.is_manual_phonetics:
-            processed_text = line.text
+            processed_text = line.phonetic_text if line.phonetic_text else line.text
         else:
             line_lang = line.language_override if line.language_override else lang
             if line_lang != lang:
                 line_preprocessor = PreprocessorFactory.get_preprocessor(line_lang)
                 line_prefix = line_lang.lower().split('-')[0]
-                line_dict_entries = session.exec(select(DictionaryEntry).where(DictionaryEntry.language == line_prefix)).all()
+                line_dict_entries = session.exec(select(DictionaryEntry).where(DictionaryEntry.language.startswith(line_prefix))).all()
                 line_dict = {e.word: e.phonetic_replacement for e in line_dict_entries}
                 processed_text = line_preprocessor.process(line.text, line_dict)
             else:

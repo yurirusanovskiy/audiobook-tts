@@ -93,28 +93,30 @@ class RussianPreprocessor(BasePreprocessor):
         1. Replace dictionary words with unique English placeholders (e.g. CWORD0)
         2. Pass text through ruaccent (it ignores English words and processes Russian)
         3. Replace placeholders with the actual phonetic rules from the dictionary.
+        4. Convert '+' to Unicode Combining Acute Accent (\u0301)
         Priority: User Dictionary > ruaccent ML.
         """
-        if not dictionary:
-            accentuator = self._get_accentuator()
-            try:
-                return accentuator.process_all(text)
-            except Exception as e:
-                print(f"[RussianPreprocessor] Warning: ruaccent failed ({e}), returning original text.")
-                return text
-
-        # 1. Protection phase (Placeholders)
         protected_text = text
         placeholder_map = {}
         
-        for i, (word, replacement) in enumerate(dictionary.items()):
-            placeholder = f"CWORD{i}"
-            placeholder_map[placeholder] = replacement
-            # Replace original word with placeholder
-            pattern = re.compile(rf'\b{re.escape(word)}\b', re.IGNORECASE)
-            protected_text = pattern.sub(placeholder, protected_text)
+        if dictionary:
+            for i, (word, replacement) in enumerate(dictionary.items()):
+                placeholder = f"CWORD{i}"
+                placeholder_map[placeholder] = replacement
+                
+                # Treat 'е' and 'ё' as equivalent in the regex pattern
+                escaped_word = re.escape(word)
+                mapped_chars = []
+                for char in escaped_word:
+                    if char.lower() in ('е', 'ё'):
+                        mapped_chars.append('[еёЕЁ]')
+                    else:
+                        mapped_chars.append(char)
+                escaped_word = "".join(mapped_chars)
+                
+                pattern = re.compile(rf'\b{escaped_word}\b', re.IGNORECASE)
+                protected_text = pattern.sub(placeholder, protected_text)
 
-        # 2. Process the text with ruaccent
         accentuator = self._get_accentuator()
         try:
             processed_text = accentuator.process_all(protected_text)
@@ -122,14 +124,14 @@ class RussianPreprocessor(BasePreprocessor):
             print(f"[RussianPreprocessor] Warning: ruaccent failed ({e}), using original text.")
             processed_text = protected_text
 
-        # 3. Restoration phase (Apply user phonetics)
         final_text = processed_text
-        for placeholder, replacement in placeholder_map.items():
-            final_text = final_text.replace(placeholder, replacement)
+        if dictionary:
+            for placeholder, replacement in placeholder_map.items():
+                final_text = final_text.replace(placeholder, replacement)
             
-        # 4. Convert '+' to Unicode Combining Acute Accent (\u0301)
-        # This converts both ruaccent's output AND the user's dictionary '+' marks
-        final_text = re.sub(r'\+(.)', r'\1\u0301', final_text)
+        # Convert '+' to Unicode Combining Acute Accent (\u0301)
+        # We use string concatenation to safely pass the unicode character to re.sub
+        final_text = re.sub(r'\+(.)', r'\1' + '\u0301', final_text)
             
         return final_text
 
