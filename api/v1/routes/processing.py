@@ -12,7 +12,7 @@ from db.crud import get_dictionary_for_language
 router = APIRouter(prefix="/processing", tags=["Processing"])
 
 class SceneLine(BaseModel):
-    character_id: str
+    character_id: Optional[str] = None
     text: str
     language_override: Optional[str] = None
     prompt_override: Optional[str] = None
@@ -29,7 +29,7 @@ class ProcessSceneResponse(BaseModel):
     audio_file_url: str
 
 class ProcessedLine(BaseModel):
-    character_id: str
+    character_id: Optional[str] = None
     original_text: str
     processed_text: str
 
@@ -54,35 +54,37 @@ def _process_lines(project_id: str, lines, session: Session):
     
     for line in lines:
         if line.character_id is None:
-            # Handle narrator/unassigned lines - skip TTS for now or assign default
-            continue
+            # Handle narrator/unassigned lines
+            char = None
+            lang = line.language_override if line.language_override else project.language_code
+            final_line_prompt = line.prompt_override or ""
+        else:
+            char = session.get(Character, line.character_id)
+            if not char:
+                raise HTTPException(status_code=404, detail=f"Character '{line.character_id}' not found in DB")
+                
+            link = session.get(ProjectCharacterLink, {"project_id": project_id, "character_id": line.character_id})
+            if not link:
+                raise HTTPException(status_code=400, detail=f"Character '{line.character_id}' is not linked to project '{project_id}'")
+                
+            # 1. Determine language for this line
+            lang = line.language_override if line.language_override else project.language_code
             
-        char = session.get(Character, line.character_id)
-        if not char:
-            raise HTTPException(status_code=404, detail=f"Character '{line.character_id}' not found in DB")
+            # 2. Base Prompt
+            base_prompt = line.prompt_override if line.prompt_override else char.prompt_style
             
-        link = session.get(ProjectCharacterLink, {"project_id": project_id, "character_id": line.character_id})
-        if not link:
-            raise HTTPException(status_code=400, detail=f"Character '{line.character_id}' is not linked to project '{project_id}'")
+            # 3. Check for Language Profile to get Accents
+            profile = session.exec(select(CharacterLanguageProfile).where(
+                CharacterLanguageProfile.character_id == char.id,
+                CharacterLanguageProfile.language_code == lang
+            )).first()
             
-        # 1. Determine language for this line
-        lang = line.language_override if line.language_override else project.language_code
-        
-        # 2. Base Prompt
-        base_prompt = line.prompt_override if line.prompt_override else char.prompt_style
-        
-        # 3. Check for Language Profile to get Accents
-        profile = session.exec(select(CharacterLanguageProfile).where(
-            CharacterLanguageProfile.character_id == char.id,
-            CharacterLanguageProfile.language_code == lang
-        )).first()
-        
-        final_line_prompt = base_prompt or ""
-        if profile and not profile.is_native and profile.accent_description:
-            if final_line_prompt:
-                final_line_prompt += f". {profile.accent_description}"
-            else:
-                final_line_prompt = profile.accent_description
+            final_line_prompt = base_prompt or ""
+            if profile and not profile.is_native and profile.accent_description:
+                if final_line_prompt:
+                    final_line_prompt += f". {profile.accent_description}"
+                else:
+                    final_line_prompt = profile.accent_description
         
         if lang not in preprocessors:
             try:
@@ -95,7 +97,7 @@ def _process_lines(project_id: str, lines, session: Session):
         processed_text = preprocessors[lang].process(line.text, dictionaries[lang])
         
         processed_lines.append(ProcessedLine(
-            character_id=char.id,
+            character_id=char.id if char else None,
             original_text=line.text,
             processed_text=processed_text
         ))

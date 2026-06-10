@@ -70,7 +70,11 @@ class RussianPreprocessor(BasePreprocessor):
         """
         if not dictionary:
             accentuator = self._get_accentuator()
-            return accentuator.process_all(text)
+            try:
+                return accentuator.process_all(text)
+            except Exception as e:
+                print(f"[RussianPreprocessor] Warning: ruaccent failed ({e}), returning original text.")
+                return text
 
         # 1. Protection phase (Placeholders)
         protected_text = text
@@ -83,12 +87,16 @@ class RussianPreprocessor(BasePreprocessor):
             pattern = re.compile(rf'\b{re.escape(word)}\b', re.IGNORECASE)
             protected_text = pattern.sub(placeholder, protected_text)
 
-        # 2. ML Accentuation
+        # 2. Process the text with ruaccent
         accentuator = self._get_accentuator()
-        ml_processed_text = accentuator.process_all(protected_text)
+        try:
+            processed_text = accentuator.process_all(protected_text)
+        except Exception as e:
+            print(f"[RussianPreprocessor] Warning: ruaccent failed ({e}), using original text.")
+            processed_text = protected_text
 
         # 3. Restoration phase (Apply user phonetics)
-        final_text = ml_processed_text
+        final_text = processed_text
         for placeholder, replacement in placeholder_map.items():
             final_text = final_text.replace(placeholder, replacement)
             

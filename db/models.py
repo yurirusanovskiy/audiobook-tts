@@ -27,11 +27,21 @@ class Scene(SQLModel, table=True):
     project: Project = Relationship(back_populates="scenes")
     lines: List["SceneLine"] = Relationship(back_populates="scene", cascade_delete=True)
 
+class LineAudioTake(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    scene_line_id: int = Field(foreign_key="sceneline.id", index=True)
+    audio_url: str = Field(description="URL to the generated audio file")
+    take_number: int = Field(default=1, description="Sequential take number")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    
+    scene_line: "SceneLine" = Relationship(back_populates="audio_takes")
+
 class SceneLine(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     scene_id: str = Field(foreign_key="scene.id", index=True)
     character_id: Optional[str] = Field(foreign_key="character.id", index=True, description="Character speaking, null if narrator")
     text: str = Field(description="The text to be spoken")
+    phonetic_text: Optional[str] = Field(default=None, description="The ruaccent processed text or manually edited phonetic text")
     language_override: Optional[str] = Field(default=None, description="Override the language for this specific line")
     prompt_override: Optional[str] = Field(default=None, description="Override the acting prompt for this specific line")
     order_index: int = Field(default=0, description="Order of the line within the scene")
@@ -40,6 +50,7 @@ class SceneLine(SQLModel, table=True):
     
     scene: Scene = Relationship(back_populates="lines")
     character: Optional["Character"] = Relationship(back_populates="lines")
+    audio_takes: List[LineAudioTake] = Relationship(back_populates="scene_line", cascade_delete=True)
 
 class CharacterLanguageProfile(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)

@@ -5,7 +5,7 @@ from pydantic import BaseModel
 import uuid
 
 from db.database import get_session
-from db.models import Scene, SceneLine, Project, Character, DictionaryEntry
+from db.models import Scene, SceneLine, Project, Character, DictionaryEntry, ProjectCharacterLink
 from core.gemini_client import GeminiTextClient, GeminiAudioClient
 from core.preprocessor import PreprocessorFactory
 
@@ -18,6 +18,7 @@ class GenerateFromTextRequest(BaseModel):
 class SceneLineCreate(BaseModel):
     character_id: Optional[str] = None
     text: str
+    phonetic_text: Optional[str] = None
     language_override: Optional[str] = None
     prompt_override: Optional[str] = None
     is_manual_phonetics: bool = False
@@ -26,16 +27,24 @@ class SceneCreate(BaseModel):
     title: str
     lines: List[SceneLineCreate]
 
+class LineAudioTakeResponse(BaseModel):
+    id: int
+    audio_url: str
+    take_number: int
+    created_at: str
+
 class SceneLineResponse(BaseModel):
     id: int
     scene_id: str
     character_id: Optional[str]
     text: str
+    phonetic_text: Optional[str]
     language_override: Optional[str]
     prompt_override: Optional[str]
     order_index: int
     is_manual_phonetics: bool
     audio_url: Optional[str]
+    audio_takes: List[LineAudioTakeResponse] = []
 
 class SceneResponse(BaseModel):
     id: str
@@ -158,6 +167,30 @@ def extract_script(scene_id: str, session: Session = Depends(get_session)):
         session.commit()
         raise HTTPException(status_code=500, detail=str(e))
         
+    # Ensure Narrator character exists for this project
+    narrator = None
+    for char in project.characters:
+        if char.name.lower() == "narrator":
+            narrator = char
+            break
+            
+    if not narrator:
+        import uuid
+        narrator = Character(
+            id=str(uuid.uuid4()),
+            name="Narrator",
+            gender="Any",
+            age_category="Any",
+            traits="Clear, articulate",
+            voice_id="Aoede",
+            prompt_style="Calm and clear"
+        )
+        session.add(narrator)
+        session.commit()
+        session.refresh(narrator)
+        session.add(ProjectCharacterLink(project_id=project.id, character_id=narrator.id))
+        session.commit()
+
     # Delete old lines if any
     for line in scene.lines:
         session.delete(line)
@@ -165,7 +198,7 @@ def extract_script(scene_id: str, session: Session = Depends(get_session)):
     for i, line in enumerate(extracted_lines):
         scene_line = SceneLine(
             scene_id=scene_id,
-            character_id=line.character_id,
+            character_id=line.character_id if line.character_id else narrator.id,
             text=line.text,
             prompt_override=line.prompt_override,
             language_override=line.language_override,
@@ -179,13 +212,22 @@ def extract_script(scene_id: str, session: Session = Depends(get_session)):
     scene.lines = sorted(scene.lines, key=lambda l: l.order_index)
     return scene
 
+class SceneLineUpdate(BaseModel):
+    id: Optional[int] = None
+    character_id: Optional[str] = None
+    text: str
+    phonetic_text: Optional[str] = None
+    language_override: Optional[str] = None
+    prompt_override: Optional[str] = None
+    is_manual_phonetics: bool = False
+
 class SceneUpdate(BaseModel):
     title: Optional[str] = None
-    lines: Optional[List[SceneLineCreate]] = None
+    lines: Optional[List[SceneLineUpdate]] = None
 
 @router.put("/scenes/{scene_id}", response_model=SceneDetailResponse)
 def update_scene(scene_id: str, scene_in: SceneUpdate, session: Session = Depends(get_session)):
-    """Update a scene's title or completely overwrite its lines."""
+    """Update a scene's title or its lines without losing relations."""
     scene = session.get(Scene, scene_id)
     if not scene:
         raise HTTPException(status_code=404, detail="Scene not found")
@@ -194,22 +236,42 @@ def update_scene(scene_id: str, scene_in: SceneUpdate, session: Session = Depend
         scene.title = scene_in.title
         
     if scene_in.lines is not None:
-        # Delete existing lines
-        for line in scene.lines:
-            session.delete(line)
-            
-        # Add new lines
+        # Create a mapping of existing lines by ID
+        existing_lines = {line.id: line for line in scene.lines}
+        
+        # Keep track of updated IDs to know which to delete
+        updated_ids = set()
+        
         for i, line_in in enumerate(scene_in.lines):
-            line = SceneLine(
-                scene_id=scene_id,
-                character_id=line_in.character_id,
-                text=line_in.text,
-                language_override=line_in.language_override,
-                prompt_override=line_in.prompt_override,
-                order_index=i,
-                is_manual_phonetics=line_in.is_manual_phonetics
-            )
-            session.add(line)
+            if line_in.id and line_in.id in existing_lines:
+                # Update existing line
+                line = existing_lines[line_in.id]
+                line.character_id = line_in.character_id
+                line.text = line_in.text
+                line.phonetic_text = line_in.phonetic_text
+                line.language_override = line_in.language_override
+                line.prompt_override = line_in.prompt_override
+                line.order_index = i
+                line.is_manual_phonetics = line_in.is_manual_phonetics
+                updated_ids.add(line_in.id)
+            else:
+                # Add new line
+                line = SceneLine(
+                    scene_id=scene_id,
+                    character_id=line_in.character_id,
+                    text=line_in.text,
+                    phonetic_text=line_in.phonetic_text,
+                    language_override=line_in.language_override,
+                    prompt_override=line_in.prompt_override,
+                    order_index=i,
+                    is_manual_phonetics=line_in.is_manual_phonetics
+                )
+                session.add(line)
+                
+        # Delete lines that were not in the updated list
+        for line_id, line in existing_lines.items():
+            if line_id not in updated_ids:
+                session.delete(line)
             
     session.commit()
     session.refresh(scene)
@@ -227,7 +289,7 @@ def delete_scene(scene_id: str, session: Session = Depends(get_session)):
     session.commit()
     return {"status": "ok"}
 
-@router.post("/{scene_id}/generate-audio", response_model=SceneDetailResponse)
+@router.post("/scenes/{scene_id}/generate-audio", response_model=SceneDetailResponse)
 def generate_audio(scene_id: str, session: Session = Depends(get_session)):
     """Generate audio for a scene using Gemini TTS after preprocessing text."""
     scene = session.get(Scene, scene_id)
@@ -299,6 +361,9 @@ def generate_audio(scene_id: str, session: Session = Depends(get_session)):
 @router.post("/scenes/{scene_id}/lines/{line_id}/generate-audio", response_model=SceneLineResponse)
 def generate_line_audio(scene_id: str, line_id: int, session: Session = Depends(get_session)):
     """Generate audio for a single scene line using Gemini TTS."""
+    from db.models import LineAudioTake
+    import time
+    
     line = session.get(SceneLine, line_id)
     if not line or line.scene_id != scene_id:
         raise HTTPException(status_code=404, detail="Line not found")
@@ -307,8 +372,8 @@ def generate_line_audio(scene_id: str, line_id: int, session: Session = Depends(
     project = session.get(Project, scene.project_id)
 
     # Preprocessing
-    if line.is_manual_phonetics:
-        processed_text = line.text
+    if line.is_manual_phonetics and line.phonetic_text:
+        processed_text = line.phonetic_text
     else:
         lang = project.language_code
         line_lang = line.language_override if line.language_override else lang
@@ -318,19 +383,37 @@ def generate_line_audio(scene_id: str, line_id: int, session: Session = Depends(
         line_dict = {e.word: e.phonetic_replacement for e in line_dict_entries}
         processed_text = line_preprocessor.process(line.text, line_dict)
 
-    # Fake character for narrator if missing
+    # Fake character for narrator if missing (should not happen now, but as fallback)
     narrator = Character(id="narrator", name="Narrator", voice_id="Aoede", prompt_style="Calm and clear")
     char = line.character if line.character else narrator
     script = [(char, processed_text, line.prompt_override)]
 
     audio_client = GeminiAudioClient()
+    
+    # Calculate next take number
+    take_number = len(line.audio_takes) + 1
+    # Use timestamp to ensure unique filename if take numbers somehow collide
+    timestamp = int(time.time())
+    file_name_base = f"{scene_id}_line_{line_id}_take_{take_number}_{timestamp}"
+    
     try:
         # Save line-specific audio
-        file_path = audio_client.generate_scene_audio(f"{scene_id}_line_{line_id}", script, output_dir="static/audio")
+        file_path = audio_client.generate_scene_audio(file_name_base, script, output_dir="static/audio")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Audio generation failed: {str(e)}")
         
-    line.audio_url = f"/static/audio/{scene_id}_line_{line_id}.wav"
+    final_url = f"/{file_path}"
+    
+    # Create the audio take
+    take = LineAudioTake(
+        scene_line_id=line.id,
+        audio_url=final_url,
+        take_number=take_number
+    )
+    session.add(take)
+    
+    # Update active audio url
+    line.audio_url = final_url
     session.commit()
     session.refresh(line)
     return line
