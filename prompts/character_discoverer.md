@@ -6,9 +6,10 @@ You will be provided with:
 
 Your rules:
 1. IDENTIFY CHARACTERS: Read the text and identify every distinct character who has spoken dialogue or plays a significant role.
-2. EXTRACT TRAITS: For each character, infer their personality, emotional state, and vocal characteristics based on how they speak and are described (e.g., "gruff, tired", "cheerful, energetic").
-3. DETERMINE GENDER: Classify the gender of the character based on the text. You must choose exactly one of: "male", "female".
-4. DETERMINE AGE: Classify the age category of the character based on the text. You must choose exactly one of: "child", "young", "adult", "elderly".
+2. ALWAYS INCLUDE NARRATOR: You MUST always include a character named "Narrator" (or "Author" / "Storyteller") in your JSON array to represent the voice that reads the descriptive text outside of dialogue. Give the narrator appropriate traits (e.g., "neutral, calm, storytelling").
+3. EXTRACT TRAITS: For each character, infer their personality, emotional state, and vocal characteristics based on how they speak and are described (e.g., "gruff, tired", "cheerful, energetic").
+4. DETERMINE GENDER: Classify the gender of the character based on the text. You must choose exactly one of: "male", "female".
+5. DETERMINE AGE: Classify the age category of the character based on the text. You must choose exactly one of: "child", "young", "adult", "elderly".
 
 Output Format:
 You must return a valid JSON array of objects. Each object must strictly match the following schema:

@@ -50,6 +50,12 @@ class GeminiAudioClient:
         speakers_list = ", ".join(speaker_names)
         
         instructions = [f"TTS the following conversation between {speakers_list}:"]
+        
+        # Inject global character styles (from Casting step)
+        for char_id, char_obj in seen_speakers.items():
+            if char_obj.prompt_style:
+                instructions.append(f"Note on {char_id}'s voice: {char_obj.prompt_style}")
+                
         instructions.append("\n" + "\n".join(prompt_parts))
         
         full_prompt = "\n".join(instructions)
@@ -115,15 +121,24 @@ class GeminiTextClient:
         
         user_prompt = f"CHARACTERS:\n{char_list_str}\n\nRAW_TEXT:\n{raw_text}"
         
-        response = self.client.models.generate_content(
-            model="gemini-3.5-flash",
-            contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                response_mime_type="application/json",
-                response_schema=list[ExtractedLine],
-            )
-        )
+        models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash", "gemini-2.5-pro"]
+        
+        for model_name in models_to_try:
+            try:
+                response = self.client.models.generate_content(
+                    model=model_name,
+                    contents=user_prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        response_mime_type="application/json",
+                        response_schema=list[ExtractedLine],
+                    )
+                )
+                break # Success!
+            except Exception as e:
+                print(f"Model {model_name} failed: {e}")
+                if model_name == models_to_try[-1]:
+                    raise RuntimeError(f"All fallback models failed. Last error: {e}")
         
         import json
         
@@ -144,15 +159,24 @@ class GeminiTextClient:
             
         user_prompt = f"RAW_TEXT:\n{raw_text}"
         
-        response = self.client.models.generate_content(
-            model="gemini-3.5-flash",
-            contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                response_mime_type="application/json",
-                response_schema=list[DiscoveredCharacter],
-            )
-        )
+        models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash", "gemini-2.5-pro"]
+        
+        for model_name in models_to_try:
+            try:
+                response = self.client.models.generate_content(
+                    model=model_name,
+                    contents=user_prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        response_mime_type="application/json",
+                        response_schema=list[DiscoveredCharacter],
+                    )
+                )
+                break # Success!
+            except Exception as e:
+                print(f"Model {model_name} failed: {e}")
+                if model_name == models_to_try[-1]:
+                    raise RuntimeError(f"All fallback models failed. Last error: {e}")
         
         import json
         

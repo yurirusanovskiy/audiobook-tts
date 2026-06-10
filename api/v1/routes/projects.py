@@ -5,16 +5,40 @@ from pydantic import BaseModel
 from db.database import get_session
 from db.models import Project, Character, ProjectCharacterLink, Scene
 import uuid
+from datetime import datetime
 from core.text_chunker import chunk_text
 
 router = APIRouter(prefix="/projects", tags=["Projects"])
 
-@router.get("/", response_model=List[Project])
+class ProjectReadWithStats(BaseModel):
+    model_config = {"from_attributes": True}
+    
+    id: str
+    title: str
+    language_code: str
+    created_at: datetime
+    total_scenes: int = 0
+    completed_scenes: int = 0
+
+@router.get("/", response_model=List[ProjectReadWithStats])
 def read_projects(session: Session = Depends(get_session)):
-    return session.exec(select(Project)).all()
+    projects = session.exec(select(Project)).all()
+    results = []
+    for p in projects:
+        scenes = session.exec(select(Scene).where(Scene.project_id == p.id)).all()
+        total_scenes = len(scenes)
+        completed_scenes = sum(1 for s in scenes if s.status == "completed")
+        p_stats = ProjectReadWithStats.model_validate(p)
+        p_stats.total_scenes = total_scenes
+        p_stats.completed_scenes = completed_scenes
+        results.append(p_stats)
+    return results
 
 @router.post("/", response_model=Project)
 def create_project(project: Project, session: Session = Depends(get_session)):
+    if not project.id:
+        project.id = f"project_{uuid.uuid4().hex[:8]}"
+        
     db_project = session.get(Project, project.id)
     if db_project:
         raise HTTPException(status_code=400, detail="Project with this ID already exists")
@@ -87,7 +111,10 @@ def discover_characters(project_id: str, req: DiscoverCharactersRequest, session
     # 1. Ask Gemini to discover characters in the text
     from core.gemini_client import GeminiTextClient
     client = GeminiTextClient()
-    discovered_chars = client.discover_characters(req.raw_text)
+    try:
+        discovered_chars = client.discover_characters(req.raw_text)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Gemini API Error: {str(e)}")
 
     # 2. Find currently used voices in this project to avoid conflicts
     used_voices = {c.voice_id for c in project.characters}
@@ -143,6 +170,37 @@ def discover_characters(project_id: str, req: DiscoverCharactersRequest, session
 
     return suggestions
 
+class BatchSaveCharactersRequest(BaseModel):
+    suggestions: List[CharacterDiscoverySuggestion]
+
+@router.post("/{project_id}/characters/batch")
+def batch_save_characters(project_id: str, req: BatchSaveCharactersRequest, session: Session = Depends(get_session)):
+    import uuid
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    for suggestion in req.suggestions:
+        if suggestion.action == "use_existing" and suggestion.existing_character_id:
+            char = session.get(Character, suggestion.existing_character_id)
+            if char and char not in project.characters:
+                project.characters.append(char)
+        elif suggestion.action == "create_new":
+            new_id = str(uuid.uuid4())
+            char = Character(
+                id=new_id,
+                name=suggestion.discovered_name,
+                voice_id=suggestion.suggested_voice_id or "Kore",
+                prompt_style=suggestion.traits,
+                gender=suggestion.gender,
+                age_category=suggestion.age_category
+            )
+            session.add(char)
+            project.characters.append(char)
+            
+    session.commit()
+    return {"ok": True, "message": f"Saved {len(req.suggestions)} characters to project"}
+
 @router.post("/{project_id}/characters/{character_id}")
 def link_character_to_project(project_id: str, character_id: str, session: Session = Depends(get_session)):
     project = session.get(Project, project_id)
@@ -174,19 +232,15 @@ def unlink_character_from_project(project_id: str, character_id: str, session: S
 
 @router.post("/{project_id}/upload-book")
 async def upload_book(project_id: str, file: UploadFile = File(...), session: Session = Depends(get_session)):
-    """Uploads a .txt file, chunks it, and creates Scenes."""
+    """Uploads a book file, extracts text, chunks it, and creates Scenes."""
     project = session.get(Project, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
         
-    if not file.filename.endswith('.txt'):
-        raise HTTPException(status_code=400, detail="Only .txt files are supported currently")
-        
     content_bytes = await file.read()
-    try:
-        raw_text = content_bytes.decode('utf-8')
-    except UnicodeDecodeError:
-        raise HTTPException(status_code=400, detail="File must be UTF-8 encoded text")
+    
+    from core.file_parser import parse_uploaded_file
+    raw_text = parse_uploaded_file(file.filename, content_bytes)
         
     from core.ml_text_chunker import chunk_text_semantically
     chunks = chunk_text_semantically(raw_text, max_chars=7000)
@@ -215,5 +269,6 @@ async def upload_book(project_id: str, file: UploadFile = File(...), session: Se
         "message": f"Successfully chunked book into {created_count} scenes.",
         "scenes_created": created_count
     }
+
 
 

@@ -20,6 +20,7 @@ class Scene(SQLModel, table=True):
     project_id: str = Field(foreign_key="project.id", index=True)
     title: Optional[str] = Field(default=None, description="Human-readable title of the scene/chapter")
     order_index: int = Field(default=0, description="Order of the scene within the project")
+    status: str = Field(default="draft", description="Status of the scene (draft, extracted, completed, error)")
     audio_url: Optional[str] = Field(default=None, description="Path to the generated audio file")
     raw_text: Optional[str] = Field(default=None, description="Raw text chunk for this scene before script extraction")
     
@@ -34,6 +35,8 @@ class SceneLine(SQLModel, table=True):
     language_override: Optional[str] = Field(default=None, description="Override the language for this specific line")
     prompt_override: Optional[str] = Field(default=None, description="Override the acting prompt for this specific line")
     order_index: int = Field(default=0, description="Order of the line within the scene")
+    is_manual_phonetics: bool = Field(default=False, description="Whether phonetics have been manually edited, bypassing ruaccent during generation")
+    audio_url: Optional[str] = Field(default=None, description="URL to the generated audio for just this line")
     
     scene: Scene = Relationship(back_populates="lines")
     character: Optional["Character"] = Relationship(back_populates="lines")

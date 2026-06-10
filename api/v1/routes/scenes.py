@@ -5,8 +5,9 @@ from pydantic import BaseModel
 import uuid
 
 from db.database import get_session
-from db.models import Scene, SceneLine, Project
-from core.gemini_client import GeminiTextClient
+from db.models import Scene, SceneLine, Project, Character, DictionaryEntry
+from core.gemini_client import GeminiTextClient, GeminiAudioClient
+from core.preprocessor import PreprocessorFactory
 
 router = APIRouter()
 
@@ -19,6 +20,7 @@ class SceneLineCreate(BaseModel):
     text: str
     language_override: Optional[str] = None
     prompt_override: Optional[str] = None
+    is_manual_phonetics: bool = False
 
 class SceneCreate(BaseModel):
     title: str
@@ -32,12 +34,16 @@ class SceneLineResponse(BaseModel):
     language_override: Optional[str]
     prompt_override: Optional[str]
     order_index: int
+    is_manual_phonetics: bool
+    audio_url: Optional[str]
 
 class SceneResponse(BaseModel):
     id: str
     project_id: str
     title: Optional[str]
     order_index: int
+    status: str
+    raw_text: Optional[str]
     audio_url: Optional[str]
 
 class SceneDetailResponse(SceneResponse):
@@ -131,6 +137,48 @@ def get_scene(scene_id: str, session: Session = Depends(get_session)):
     scene.lines = sorted(scene.lines, key=lambda l: l.order_index)
     return scene
 
+@router.post("/scenes/{scene_id}/extract", response_model=SceneDetailResponse)
+def extract_script(scene_id: str, session: Session = Depends(get_session)):
+    """Extract script from existing scene's raw_text."""
+    scene = session.get(Scene, scene_id)
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+    if not scene.raw_text:
+        raise HTTPException(status_code=400, detail="Scene has no raw text")
+        
+    project = session.get(Project, scene.project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    text_client = GeminiTextClient()
+    try:
+        extracted_lines = text_client.extract_script_from_text(scene.raw_text, project.characters)
+    except Exception as e:
+        scene.status = "error"
+        session.commit()
+        raise HTTPException(status_code=500, detail=str(e))
+        
+    # Delete old lines if any
+    for line in scene.lines:
+        session.delete(line)
+        
+    for i, line in enumerate(extracted_lines):
+        scene_line = SceneLine(
+            scene_id=scene_id,
+            character_id=line.character_id,
+            text=line.text,
+            prompt_override=line.prompt_override,
+            language_override=line.language_override,
+            order_index=i
+        )
+        session.add(scene_line)
+        
+    scene.status = "extracted"
+    session.commit()
+    session.refresh(scene)
+    scene.lines = sorted(scene.lines, key=lambda l: l.order_index)
+    return scene
+
 class SceneUpdate(BaseModel):
     title: Optional[str] = None
     lines: Optional[List[SceneLineCreate]] = None
@@ -158,7 +206,8 @@ def update_scene(scene_id: str, scene_in: SceneUpdate, session: Session = Depend
                 text=line_in.text,
                 language_override=line_in.language_override,
                 prompt_override=line_in.prompt_override,
-                order_index=i
+                order_index=i,
+                is_manual_phonetics=line_in.is_manual_phonetics
             )
             session.add(line)
             
@@ -177,3 +226,111 @@ def delete_scene(scene_id: str, session: Session = Depends(get_session)):
     session.delete(scene)
     session.commit()
     return {"status": "ok"}
+
+@router.post("/{scene_id}/generate-audio", response_model=SceneDetailResponse)
+def generate_audio(scene_id: str, session: Session = Depends(get_session)):
+    """Generate audio for a scene using Gemini TTS after preprocessing text."""
+    scene = session.get(Scene, scene_id)
+    if not scene:
+        raise HTTPException(status_code=404, detail="Scene not found")
+        
+    project = session.get(Project, scene.project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Sort lines by order
+    lines = sorted(scene.lines, key=lambda l: l.order_index)
+    if not lines:
+        raise HTTPException(status_code=400, detail="Scene has no lines to generate audio from.")
+
+    # Get dictionary for project language
+    lang = project.language_code
+    prefix = lang.lower().split('-')[0]
+    db_dict = session.exec(select(DictionaryEntry).where(DictionaryEntry.language == prefix)).all()
+    dictionary = {entry.word: entry.phonetic_replacement for entry in db_dict}
+    
+    preprocessor = PreprocessorFactory.get_preprocessor(lang)
+    
+    # Prepare script for Gemini
+    script = []
+    
+    # Fake character for narrator if missing
+    narrator = Character(id="narrator", name="Narrator", voice_id="Aoede", prompt_style="Calm and clear")
+    
+    for line in lines:
+        # 1. Phonetic preprocessing
+        if line.is_manual_phonetics:
+            processed_text = line.text
+        else:
+            # Use language override if present, else default project language
+            line_lang = line.language_override if line.language_override else lang
+            if line_lang != lang:
+                line_preprocessor = PreprocessorFactory.get_preprocessor(line_lang)
+                # Dictionaries are currently global per base language
+                line_prefix = line_lang.lower().split('-')[0]
+                line_dict_entries = session.exec(select(DictionaryEntry).where(DictionaryEntry.language == line_prefix)).all()
+                line_dict = {e.word: e.phonetic_replacement for e in line_dict_entries}
+                processed_text = line_preprocessor.process(line.text, line_dict)
+            else:
+                processed_text = preprocessor.process(line.text, dictionary)
+        
+        # 2. Add to script
+        char = line.character if line.character else narrator
+        script.append((char, processed_text, line.prompt_override))
+        
+    # Generate Audio
+    audio_client = GeminiAudioClient()
+    try:
+        # Save to static directory so frontend can access it
+        file_path = audio_client.generate_scene_audio(scene_id, script, output_dir="static/audio")
+    except Exception as e:
+        scene.status = "error"
+        session.commit()
+        raise HTTPException(status_code=500, detail=f"Audio generation failed: {str(e)}")
+        
+    scene.audio_url = f"/static/audio/{scene_id}.wav"
+    scene.status = "completed"
+    session.commit()
+    session.refresh(scene)
+    
+    scene.lines = sorted(scene.lines, key=lambda l: l.order_index)
+    return scene
+
+@router.post("/scenes/{scene_id}/lines/{line_id}/generate-audio", response_model=SceneLineResponse)
+def generate_line_audio(scene_id: str, line_id: int, session: Session = Depends(get_session)):
+    """Generate audio for a single scene line using Gemini TTS."""
+    line = session.get(SceneLine, line_id)
+    if not line or line.scene_id != scene_id:
+        raise HTTPException(status_code=404, detail="Line not found")
+        
+    scene = session.get(Scene, scene_id)
+    project = session.get(Project, scene.project_id)
+
+    # Preprocessing
+    if line.is_manual_phonetics:
+        processed_text = line.text
+    else:
+        lang = project.language_code
+        line_lang = line.language_override if line.language_override else lang
+        line_preprocessor = PreprocessorFactory.get_preprocessor(line_lang)
+        line_prefix = line_lang.lower().split('-')[0]
+        line_dict_entries = session.exec(select(DictionaryEntry).where(DictionaryEntry.language == line_prefix)).all()
+        line_dict = {e.word: e.phonetic_replacement for e in line_dict_entries}
+        processed_text = line_preprocessor.process(line.text, line_dict)
+
+    # Fake character for narrator if missing
+    narrator = Character(id="narrator", name="Narrator", voice_id="Aoede", prompt_style="Calm and clear")
+    char = line.character if line.character else narrator
+    script = [(char, processed_text, line.prompt_override)]
+
+    audio_client = GeminiAudioClient()
+    try:
+        # Save line-specific audio
+        file_path = audio_client.generate_scene_audio(f"{scene_id}_line_{line_id}", script, output_dir="static/audio")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Audio generation failed: {str(e)}")
+        
+    line.audio_url = f"/static/audio/{scene_id}_line_{line_id}.wav"
+    session.commit()
+    session.refresh(line)
+    return line

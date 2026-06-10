@@ -1,6 +1,9 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 import uvicorn
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from db.database import create_db_and_tables
 
