@@ -1,6 +1,9 @@
 import os
 import wave
+import json
+import re
 from typing import List, Tuple, Dict, Any, Optional
+from fastapi import HTTPException
 from google import genai
 from google.genai import types
 from db.models import Character
@@ -132,6 +135,18 @@ class DiscoveredCharacter(BaseModel):
     gender: str
     age_category: str
 
+def _handle_gemini_error(e: Exception) -> Exception:
+    error_str = str(e)
+    if "RESOURCE_EXHAUSTED" in error_str or "429" in error_str:
+        match = re.search(r'Please retry in ([0-9.]+)s', error_str)
+        if match:
+            wait_time = int(float(match.group(1)))
+            return HTTPException(status_code=429, detail=f"Gemini API rate limit exceeded. Please wait {wait_time} seconds and try again.")
+        return HTTPException(status_code=429, detail="Gemini API rate limit exceeded. Please wait a minute and try again.")
+    if "UNAVAILABLE" in error_str or "503" in error_str:
+        return HTTPException(status_code=503, detail="Gemini API is currently overloaded (503). Please try again in a few moments.")
+    return RuntimeError(f"All fallback models failed. Last error: {e}")
+
 class GeminiTextClient:
     def __init__(self):
         self.client = genai.Client()
@@ -165,7 +180,7 @@ class GeminiTextClient:
             except Exception as e:
                 print(f"Model {model_name} failed: {e}")
                 if model_name == models_to_try[-1]:
-                    raise RuntimeError(f"All fallback models failed. Last error: {e}")
+                    raise _handle_gemini_error(e)
         
         import json
         
@@ -203,7 +218,7 @@ class GeminiTextClient:
             except Exception as e:
                 print(f"Model {model_name} failed: {e}")
                 if model_name == models_to_try[-1]:
-                    raise RuntimeError(f"All fallback models failed. Last error: {e}")
+                    raise _handle_gemini_error(e)
         
         import json
         

@@ -119,6 +119,8 @@ def generate_scene_from_text(project_id: str, request: GenerateFromTextRequest, 
     text_client = GeminiTextClient()
     try:
         extracted_lines = text_client.extract_script_from_text(request.raw_text, characters)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
         
@@ -413,7 +415,12 @@ def generate_audio(scene_id: str, session: Session = Depends(get_session)):
     from core.audio_utils import stitch_wavs
     import os
     
-    scene_dir = f"static/audio/{scene_id}_stems"
+    if project.storage_path:
+        base_dir = os.path.expanduser(project.storage_path)
+    else:
+        base_dir = "static/audio"
+        
+    scene_dir = os.path.join(base_dir, f"{scene_id}_stems")
     os.makedirs(scene_dir, exist_ok=True)
     
     chunk_files = []
@@ -431,13 +438,13 @@ def generate_audio(scene_id: str, session: Session = Depends(get_session)):
             chunk_files.append(chunk_file_path)
             
             # Update audio_url for all lines in the chunk
-            final_url = f"/{chunk_file_path}"
+            final_url = os.path.abspath(chunk_file_path) if project.storage_path else f"/{chunk_file_path}"
             for line, char, _, _ in chunk:
                 line.audio_url = final_url
                 session.add(line)
             
         # Stitch them together
-        final_file_path = f"static/audio/{scene_id}.wav"
+        final_file_path = os.path.join(base_dir, f"{scene_id}.wav")
         stitch_wavs(chunk_files, final_file_path)
         
     except Exception as e:
@@ -445,7 +452,7 @@ def generate_audio(scene_id: str, session: Session = Depends(get_session)):
         session.commit()
         raise HTTPException(status_code=500, detail=f"Audio generation failed: {str(e)}")
         
-    scene.audio_url = f"/static/audio/{scene_id}.wav"
+    scene.audio_url = os.path.abspath(final_file_path) if project.storage_path else f"/{final_file_path}"
     scene.status = "completed"
     session.commit()
     session.refresh(scene)
@@ -465,11 +472,17 @@ def download_scene_stems(scene_id: str, session: Session = Depends(get_session))
     if not scene:
         raise HTTPException(status_code=404, detail="Scene not found")
         
-    scene_dir = f"static/audio/{scene_id}_stems"
+    project = session.get(Project, scene.project_id)
+    if project and project.storage_path:
+        base_dir = os.path.expanduser(project.storage_path)
+    else:
+        base_dir = "static/audio"
+        
+    scene_dir = os.path.join(base_dir, f"{scene_id}_stems")
     if not os.path.exists(scene_dir) or not os.listdir(scene_dir):
         raise HTTPException(status_code=404, detail="Stems not found for this scene. Please generate audio first.")
         
-    zip_path = f"static/audio/{scene_id}_stems.zip"
+    zip_path = os.path.join(base_dir, f"{scene_id}_stems.zip")
     
     # Create zip file
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
@@ -518,7 +531,14 @@ def generate_line_audio(scene_id: str, line_id: int, session: Session = Depends(
         
     # 3. Generate audio for this specific chunk
     audio_client = GeminiAudioClient()
-    scene_dir = f"static/audio/{scene_id}_stems"
+    
+    project = session.get(Project, scene.project_id)
+    if project and project.storage_path:
+        base_dir = os.path.expanduser(project.storage_path)
+    else:
+        base_dir = "static/audio"
+        
+    scene_dir = os.path.join(base_dir, f"{scene_id}_stems")
     os.makedirs(scene_dir, exist_ok=True)
     
     # Extract script items from chunk: (Character, processed_text, final_prompt)
@@ -538,7 +558,7 @@ def generate_line_audio(scene_id: str, line_id: int, session: Session = Depends(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Audio generation failed: {str(e)}")
 
-    final_url = f"/{chunk_file_path}"
+    final_url = os.path.abspath(chunk_file_path) if project and project.storage_path else f"/{chunk_file_path}"
     
     # Update audio_url for all lines in the chunk
     for chunk_line, _, _, _ in target_chunk:
@@ -563,14 +583,16 @@ def generate_line_audio(scene_id: str, line_id: int, session: Session = Depends(
     for idx, chunk in enumerate(chunks):
         c_line = chunk[0][0]
         if c_line.audio_url:
-            c_path = c_line.audio_url.lstrip("/") # Remove leading slash to get local path
+            c_path = c_line.audio_url
+            if c_path.startswith('/static/'):
+                c_path = c_path.lstrip('/')
             if os.path.exists(c_path):
                 chunk_files.append(c_path)
             
     if chunk_files:
-        final_scene_file = f"static/audio/{scene_id}.wav"
+        final_scene_file = os.path.join(base_dir, f"{scene_id}.wav")
         stitch_wavs(chunk_files, final_scene_file)
-        scene.audio_url = f"/{final_scene_file}"
+        scene.audio_url = os.path.abspath(final_scene_file) if project and project.storage_path else f"/{final_scene_file}"
         session.add(scene)
     
     session.commit()

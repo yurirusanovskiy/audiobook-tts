@@ -10,6 +10,7 @@ class Project(SQLModel, table=True):
     id: str = Field(primary_key=True, description="Unique identifier for the project, e.g., 'harry_potter_1'")
     title: str = Field(index=True, description="Human-readable title of the book/project")
     language_code: str = Field(default="ru-RU", description="Default language of the project")
+    storage_path: Optional[str] = Field(default=None, description="Absolute path on the host machine to store audio files for this project")
     created_at: datetime = Field(default_factory=datetime.utcnow)
     
     characters: List["Character"] = Relationship(back_populates="projects", link_model=ProjectCharacterLink)

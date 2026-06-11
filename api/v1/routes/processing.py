@@ -146,13 +146,16 @@ def process_scene(request: ProcessSceneRequest, session: Session = Depends(get_s
     client = GeminiAudioClient()
     try:
         # Save output in a project-specific folder
-        output_dir = f"static/audio/{project.id}"
+        if project.storage_path:
+            output_dir = os.path.expanduser(project.storage_path)
+        else:
+            output_dir = f"static/audio/{project.id}"
         os.makedirs(output_dir, exist_ok=True)
         
         file_path = client.generate_scene_audio(request.scene_id, script, output_dir=output_dir)
         
         # Save the audio url back to the Scene
-        scene.audio_url = f"/{file_path}"
+        scene.audio_url = os.path.abspath(file_path) if project.storage_path else f"/{file_path}"
         session.commit()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Audio generation failed: {str(e)}")

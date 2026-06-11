@@ -1,4 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi.responses import FileResponse
+import os
 from sqlmodel import Session, select
 from typing import List, Optional
 from pydantic import BaseModel
@@ -10,12 +12,20 @@ from core.text_chunker import chunk_text
 
 router = APIRouter(prefix="/projects", tags=["Projects"])
 
+@router.get("/stream-audio")
+def stream_audio(path: str):
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Audio file not found")
+    return FileResponse(path)
+
+
 class ProjectReadWithStats(BaseModel):
     model_config = {"from_attributes": True}
     
     id: str
     title: str
     language_code: str
+    storage_path: Optional[str] = None
     created_at: datetime
     total_scenes: int = 0
     completed_scenes: int = 0
@@ -57,6 +67,7 @@ def read_project(project_id: str, session: Session = Depends(get_session)):
 class ProjectUpdate(BaseModel):
     title: Optional[str] = None
     language_code: Optional[str] = None
+    storage_path: Optional[str] = None
 
 @router.put("/{project_id}", response_model=Project)
 def update_project(project_id: str, project_in: ProjectUpdate, session: Session = Depends(get_session)):
@@ -64,11 +75,11 @@ def update_project(project_id: str, project_in: ProjectUpdate, session: Session 
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
-    if project_in.title is not None:
-        project.title = project_in.title
-    if project_in.language_code is not None:
-        project.language_code = project_in.language_code
-        
+    update_data = project_in.model_dump(exclude_unset=True)
+    for k, v in update_data.items():
+        if k in ["title", "language_code", "storage_path"]:
+            setattr(project, k, v)
+    session.add(project)
     session.commit()
     session.refresh(project)
     return project
@@ -113,6 +124,8 @@ def discover_characters(project_id: str, req: DiscoverCharactersRequest, session
     client = GeminiTextClient()
     try:
         discovered_chars = client.discover_characters(req.raw_text)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Gemini API Error: {str(e)}")
 
@@ -229,6 +242,41 @@ def unlink_character_from_project(project_id: str, character_id: str, session: S
     session.delete(link)
     session.commit()
     return {"ok": True, "message": "Character unlinked from project"}
+
+class SwapCharacterRequest(BaseModel):
+    old_character_id: str
+    new_character_id: str
+
+@router.post("/{project_id}/characters/swap")
+def swap_character_in_project(project_id: str, req: SwapCharacterRequest, session: Session = Depends(get_session)):
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # 1. Link new character to project if not already linked
+    new_char_link = session.get(ProjectCharacterLink, {"project_id": project_id, "character_id": req.new_character_id})
+    if not new_char_link:
+        session.add(ProjectCharacterLink(project_id=project_id, character_id=req.new_character_id))
+    
+    # 2. Update all SceneLines that belong to this project and have old_character_id
+    from db.models import Scene, SceneLine
+    stmt = select(SceneLine).join(Scene).where(
+        Scene.project_id == project_id,
+        SceneLine.character_id == req.old_character_id
+    )
+    lines_to_update = session.exec(stmt).all()
+    for line in lines_to_update:
+        line.character_id = req.new_character_id
+        session.add(line)
+        
+    # 3. Unlink old character
+    old_char_link = session.get(ProjectCharacterLink, {"project_id": project_id, "character_id": req.old_character_id})
+    if old_char_link:
+        session.delete(old_char_link)
+        
+    session.commit()
+    return {"ok": True, "message": f"Swapped character and updated {len(lines_to_update)} lines"}
+
 
 @router.post("/{project_id}/upload-book")
 async def upload_book(project_id: str, file: UploadFile = File(...), session: Session = Depends(get_session)):

@@ -9,8 +9,15 @@ _embeddings_instance = None
 def get_embeddings():
     global _embeddings_instance
     if _embeddings_instance is None:
+        import os
+        # Use a persistent local cache directory to prevent macOS from deleting the temp ONNX files
+        cache_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'models', 'fastembed_cache'))
+        os.makedirs(cache_dir, exist_ok=True)
         # Using a lightweight, fast, multilingual model suitable for Russian
-        _embeddings_instance = FastEmbedEmbeddings(model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+        _embeddings_instance = FastEmbedEmbeddings(
+            model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+            cache_dir=cache_dir
+        )
     return _embeddings_instance
 
 def chunk_text_semantically(text: str, max_chars: int = 7000) -> List[str]:
@@ -22,17 +29,16 @@ def chunk_text_semantically(text: str, max_chars: int = 7000) -> List[str]:
     if not text.strip():
         return []
 
-    embeddings = get_embeddings()
-    
-    # The SemanticChunker splits by sentences and compares their cosine similarity.
-    # It sets a breakpoint where the semantic difference is highest (e.g. above a percentile).
-    text_splitter = SemanticChunker(embeddings, breakpoint_threshold_type="percentile")
-    
     try:
+        embeddings = get_embeddings()
+        
+        # The SemanticChunker splits by sentences and compares their cosine similarity.
+        # It sets a breakpoint where the semantic difference is highest (e.g. above a percentile).
+        text_splitter = SemanticChunker(embeddings, breakpoint_threshold_type="percentile")
         docs = text_splitter.create_documents([text])
         semantic_groups = [doc.page_content.strip() for doc in docs if doc.page_content.strip()]
     except Exception as e:
-        # Fallback to simple chunking if ML chunking fails for some reason
+        # Fallback to simple chunking if ML chunking or model initialization fails for some reason
         print(f"ML Chunking failed: {e}. Falling back to basic paragraph chunking.")
         return fallback_chunk_text(text, max_chars)
     
