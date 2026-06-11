@@ -132,6 +132,9 @@ class RussianPreprocessor(BasePreprocessor):
         # Convert '+' to Unicode Combining Acute Accent (\u0301)
         # We use string concatenation to safely pass the unicode character to re.sub
         final_text = re.sub(r'\+(.)', r'\1' + '\u0301', final_text)
+
+        # Replace 'ё'/'Ё' with 'ьо'/'Ьо' because Gemini 3.1 TTS mispronounces 'ё' as 'е'
+        final_text = final_text.replace('ё', 'ьо').replace('Ё', 'Ьо')
             
         return final_text
 

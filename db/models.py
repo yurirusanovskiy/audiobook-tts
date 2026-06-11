@@ -99,3 +99,14 @@ class DictionaryEntry(SQLModel, table=True):
     phonetic_replacement: str = Field(
         description="The phonetic pronunciation or custom replacement"
     )
+
+class APIKey(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(description="Name of the key owner, e.g., 'Wife', 'Son'")
+    key_value: str = Field(description="The actual API key")
+    is_exhausted: bool = Field(default=False, description="Flagged if 429 quota reached")
+    exhausted_until: Optional[datetime] = Field(default=None)
+
+class Settings(SQLModel, table=True):
+    id: int = Field(default=1, primary_key=True)
+    active_api_key_id: Optional[int] = Field(foreign_key="apikey.id", default=None)

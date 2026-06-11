@@ -4,16 +4,59 @@ import json
 import re
 import time
 from typing import List, Tuple, Dict, Any, Optional
+import datetime
 from fastapi import HTTPException
+from sqlmodel import Session, select
+from db.database import engine
+from db.models import Character, APIKey, Settings
+from pydantic import BaseModel
 from google import genai
 from google.genai import types
-from db.models import Character
-from pydantic import BaseModel
+
+def _get_active_api_key() -> str | None:
+    with Session(engine) as sess:
+        settings = sess.exec(select(Settings)).first()
+        if settings and settings.active_api_key_id:
+            key = sess.get(APIKey, settings.active_api_key_id)
+            if key and not key.is_exhausted:
+                return key.key_value
+        
+        # Fallback to first non-exhausted key
+        key = sess.exec(select(APIKey).where(APIKey.is_exhausted == False)).first()
+        if key:
+            if settings:
+                settings.active_api_key_id = key.id
+                sess.add(settings)
+                sess.commit()
+            return key.key_value
+        
+        # Fallback to environment variable if no DB keys are active
+        return os.environ.get("GEMINI_API_KEY")
+
+def _mark_key_exhausted_and_switch(api_key_value: str):
+    if not api_key_value:
+        return
+    with Session(engine) as sess:
+        key = sess.exec(select(APIKey).where(APIKey.key_value == api_key_value)).first()
+        if key:
+            key.is_exhausted = True
+            key.exhausted_until = datetime.datetime.utcnow() + datetime.timedelta(minutes=15)
+            
+            settings = sess.exec(select(Settings)).first()
+            next_key = sess.exec(select(APIKey).where(APIKey.is_exhausted == False, APIKey.id != key.id)).first()
+            if settings:
+                settings.active_api_key_id = next_key.id if next_key else None
+                sess.add(settings)
+            sess.add(key)
+            sess.commit()
+            print(f"API Key {key.name} marked as exhausted. Switched to next key.")
 
 class GeminiAudioClient:
     def __init__(self):
-        # GEMINI_API_KEY must be set in the environment
-        self.client = genai.Client()
+        self.api_key = _get_active_api_key()
+        if not self.api_key:
+            raise RuntimeError("No active Gemini API key found in Settings or Environment.")
+        self.client = genai.Client(api_key=self.api_key)
 
     def generate_audio_chunk(self, file_path: str, script: List[Tuple[Character, str, str]]) -> str:
         """
@@ -97,7 +140,28 @@ class GeminiAudioClient:
                 )
                 break  # Success
             except Exception as e:
-                print(f"Gemini API Error (Attempt {attempt + 1}/{max_retries}): {e}")
+                error_str = str(e)
+                print(f"Gemini API Error (Attempt {attempt + 1}/{max_retries}): {error_str}")
+                
+                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                    print("RESOURCE_EXHAUSTED. Rotating API Key...")
+                    _mark_key_exhausted_and_switch(self.api_key)
+                    new_key = _get_active_api_key()
+                    if new_key and new_key != self.api_key:
+                        print("Successfully rotated to new key.")
+                        self.api_key = new_key
+                        self.client = genai.Client(api_key=self.api_key)
+                        continue
+                        
+                    match = re.search(r'Please retry in ([0-9.]+)s', error_str)
+                    if match:
+                        wait_time = int(float(match.group(1))) + 1
+                        print(f"Rate limit hit. Waiting {wait_time}s before retrying...")
+                        time.sleep(wait_time)
+                    else:
+                        time.sleep(10)
+                    continue
+
                 if attempt == max_retries - 1:
                     raise RuntimeError(f"Gemini API failed after {max_retries} attempts: {str(e)}") from e
                 time.sleep(base_delay)
@@ -150,7 +214,10 @@ def _handle_gemini_error(e: Exception) -> Exception:
 
 class GeminiTextClient:
     def __init__(self):
-        self.client = genai.Client()
+        self.api_key = _get_active_api_key()
+        if not self.api_key:
+            raise RuntimeError("No active Gemini API key found in Settings or Environment.")
+        self.client = genai.Client(api_key=self.api_key)
 
     def _generate_with_retry(self, user_prompt: str, system_instruction: str, response_schema: Any, max_retries: int = 3) -> Any:
         models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash", "gemini-2.5-pro"]
@@ -175,6 +242,19 @@ class GeminiTextClient:
                     if "404" in error_str or "NOT_FOUND" in error_str:
                         continue
                     if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                        # Auto-rotate key
+                        print("RESOURCE_EXHAUSTED. Rotating API Key...")
+                        _mark_key_exhausted_and_switch(self.api_key)
+                        # Re-init client with new key
+                        new_key = _get_active_api_key()
+                        if new_key and new_key != self.api_key:
+                            print("Successfully rotated to new key.")
+                            self.api_key = new_key
+                            self.client = genai.Client(api_key=self.api_key)
+                            # Do not break, just let it retry immediately with the new key!
+                            continue
+                            
+                        # If no other keys, fallback to wait logic
                         match = re.search(r'Please retry in ([0-9.]+)s', error_str)
                         if match:
                             wait_time = int(float(match.group(1))) + 1
