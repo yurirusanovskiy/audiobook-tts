@@ -2,6 +2,7 @@ import os
 import wave
 import json
 import re
+import time
 from typing import List, Tuple, Dict, Any, Optional
 from fastapi import HTTPException
 from google import genai
@@ -150,6 +151,46 @@ def _handle_gemini_error(e: Exception) -> Exception:
 class GeminiTextClient:
     def __init__(self):
         self.client = genai.Client()
+
+    def _generate_with_retry(self, user_prompt: str, system_instruction: str, response_schema: Any, max_retries: int = 3) -> Any:
+        models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash", "gemini-2.5-pro"]
+        
+        for attempt in range(max_retries):
+            for model_name in models_to_try:
+                try:
+                    response = self.client.models.generate_content(
+                        model=model_name,
+                        contents=user_prompt,
+                        config=types.GenerateContentConfig(
+                            system_instruction=system_instruction,
+                            response_mime_type="application/json",
+                            response_schema=response_schema,
+                        )
+                    )
+                    return response
+                except Exception as e:
+                    error_str = str(e)
+                    print(f"Model {model_name} failed (Attempt {attempt+1}/{max_retries}): {error_str}")
+                    
+                    if "404" in error_str or "NOT_FOUND" in error_str:
+                        continue
+                    if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                        match = re.search(r'Please retry in ([0-9.]+)s', error_str)
+                        if match:
+                            wait_time = int(float(match.group(1))) + 1
+                            print(f"Rate limit hit. Waiting {wait_time}s before retrying...")
+                            time.sleep(wait_time)
+                        else:
+                            time.sleep(10)
+                        break 
+                    if "503" in error_str or "UNAVAILABLE" in error_str:
+                        time.sleep(5)
+                        continue
+            
+            if attempt < max_retries - 1:
+                time.sleep(5)
+                
+        raise RuntimeError("All models and retries failed.")
         
     def extract_script_from_text(self, raw_text: str, characters: List[Character]) -> List[ExtractedLine]:
         """
@@ -163,24 +204,7 @@ class GeminiTextClient:
         
         user_prompt = f"CHARACTERS:\n{char_list_str}\n\nRAW_TEXT:\n{raw_text}"
         
-        models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash", "gemini-2.5-pro"]
-        
-        for model_name in models_to_try:
-            try:
-                response = self.client.models.generate_content(
-                    model=model_name,
-                    contents=user_prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_instruction,
-                        response_mime_type="application/json",
-                        response_schema=list[ExtractedLine],
-                    )
-                )
-                break # Success!
-            except Exception as e:
-                print(f"Model {model_name} failed: {e}")
-                if model_name == models_to_try[-1]:
-                    raise _handle_gemini_error(e)
+        response = self._generate_with_retry(user_prompt, system_instruction, list[ExtractedLine])
         
         import json
         
@@ -201,24 +225,7 @@ class GeminiTextClient:
             
         user_prompt = f"RAW_TEXT:\n{raw_text}"
         
-        models_to_try = ["gemini-3.5-flash", "gemini-3.1-flash", "gemini-2.5-pro"]
-        
-        for model_name in models_to_try:
-            try:
-                response = self.client.models.generate_content(
-                    model=model_name,
-                    contents=user_prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_instruction,
-                        response_mime_type="application/json",
-                        response_schema=list[DiscoveredCharacter],
-                    )
-                )
-                break # Success!
-            except Exception as e:
-                print(f"Model {model_name} failed: {e}")
-                if model_name == models_to_try[-1]:
-                    raise _handle_gemini_error(e)
+        response = self._generate_with_retry(user_prompt, system_instruction, list[DiscoveredCharacter])
         
         import json
         
