@@ -171,6 +171,8 @@ def discover_characters(project_id: str, req: DiscoverCharactersRequest, session
 
     # 2. Find currently used voices in this project to avoid conflicts
     used_voices = {c.voice_id for c in project.characters}
+    assigned_existing_chars = set()
+
     # All 30 official Gemini prebuilt TTS voices (from gemini_tts_api.md docs)
     available_voices = [
         "Zephyr",       # Bright
@@ -205,7 +207,6 @@ def discover_characters(project_id: str, req: DiscoverCharactersRequest, session
         "Sulafat",      # Warm
     ]
 
-
     suggestions = []
     
     for d_char in discovered_chars:
@@ -228,6 +229,9 @@ def discover_characters(project_id: str, req: DiscoverCharactersRequest, session
         # Try to find an existing character whose voice is not already taken by someone else in this project
         best_match = None
         for mc in matching_chars:
+            if mc.id in assigned_existing_chars:
+                continue
+
             if mc in project.characters:
                 # Already linked, perfect! Use this.
                 best_match = mc
@@ -239,7 +243,7 @@ def discover_characters(project_id: str, req: DiscoverCharactersRequest, session
         if best_match:
             suggestion.action = "use_existing"
             suggestion.existing_character_id = best_match.id
-            # Also register the voice as used for subsequent characters in this loop
+            assigned_existing_chars.add(best_match.id)
             used_voices.add(best_match.voice_id)
         else:
             suggestion.action = "create_new"
