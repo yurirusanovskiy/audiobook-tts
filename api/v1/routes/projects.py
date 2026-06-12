@@ -261,7 +261,6 @@ class BatchSaveCharactersRequest(BaseModel):
 
 @router.post("/{project_id}/characters/batch")
 def batch_save_characters(project_id: str, req: BatchSaveCharactersRequest, session: Session = Depends(get_session)):
-    import uuid
     project = session.get(Project, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -279,7 +278,10 @@ def batch_save_characters(project_id: str, req: BatchSaveCharactersRequest, sess
                     )
                     session.add(link)
                 else:
+                    # Update alias on existing link — must call session.add() so
+                    # SQLModel/SQLAlchemy marks the row as dirty and includes it in commit.
                     link.alias = suggestion.discovered_name
+                    session.add(link)
         elif suggestion.action == "create_new":
             new_id = str(uuid.uuid4())
             char = Character(
