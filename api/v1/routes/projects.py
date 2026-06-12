@@ -171,14 +171,40 @@ def discover_characters(project_id: str, req: DiscoverCharactersRequest, session
 
     # 2. Find currently used voices in this project to avoid conflicts
     used_voices = {c.voice_id for c in project.characters}
-    # All 30 Gemini prebuilt TTS voices
+    # All 30 official Gemini prebuilt TTS voices (from gemini_tts_api.md docs)
     available_voices = [
-        "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Aoede",
-        "Leda", "Orus", "Pegasus", "Schedar", "Gacrux", "Pulcherrima",
-        "Achird", "Zubenelgenubi", "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat",
-        "Algenib", "Rasalghul", "Umbriel", "Erinome", "Iapetus", "Kalyke",
-        "Caelum", "Dione", "Callisto", "Laomedeia", "Enif", "Alnilam",
+        "Zephyr",       # Bright
+        "Puck",         # Upbeat
+        "Charon",       # Informative
+        "Kore",         # Firm
+        "Fenrir",       # Excitable
+        "Leda",         # Youthful
+        "Orus",         # Firm
+        "Aoede",        # Breezy
+        "Callirrhoe",   # Easy-going
+        "Autonoe",      # Bright
+        "Enceladus",    # Breathy
+        "Iapetus",      # Clear
+        "Umbriel",      # Easy-going
+        "Algieba",      # Smooth
+        "Despina",      # Smooth
+        "Erinome",      # Clear
+        "Algenib",      # Gravelly
+        "Rasalgethi",   # Informative
+        "Laomedeia",    # Upbeat
+        "Achernar",     # Soft
+        "Alnilam",      # Firm
+        "Schedar",      # Even
+        "Gacrux",       # Mature
+        "Pulcherrima",  # Forward
+        "Achird",       # Friendly
+        "Zubenelgenubi",# Casual
+        "Vindemiatrix", # Gentle
+        "Sadachbia",    # Lively
+        "Sadaltager",   # Knowledgeable
+        "Sulafat",      # Warm
     ]
+
 
     suggestions = []
     
