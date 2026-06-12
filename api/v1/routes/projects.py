@@ -94,12 +94,33 @@ def delete_project(project_id: str, session: Session = Depends(get_session)):
     session.commit()
     return {"ok": True, "message": "Project and all associated scenes deleted"}
 
-@router.get("/{project_id}/characters", response_model=List[Character])
+class ProjectCharacterResponse(BaseModel):
+    """A Character enriched with a project-specific alias. Uses plain BaseModel
+    to avoid inheriting SQLAlchemy Mapped relationship fields from the table class."""
+    id: str
+    name: str
+    voice_id: str
+    prompt_style: Optional[str] = None
+    pitch_override: Optional[str] = None
+    gender: Optional[str] = None
+    age_category: Optional[str] = None
+    sample_audio_url: Optional[str] = None
+    alias: Optional[str] = None
+
+
+@router.get("/{project_id}/characters", response_model=List[ProjectCharacterResponse])
 def read_project_characters(project_id: str, session: Session = Depends(get_session)):
     project = session.get(Project, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    return project.characters
+        
+    results = []
+    for char in project.characters:
+        link = session.get(ProjectCharacterLink, {"project_id": project_id, "character_id": char.id})
+        char_dict = char.model_dump()
+        char_dict["alias"] = link.alias if link else None
+        results.append(ProjectCharacterResponse(**char_dict))
+    return results
 
 class DiscoverCharactersRequest(BaseModel):
     raw_text: str
@@ -196,8 +217,17 @@ def batch_save_characters(project_id: str, req: BatchSaveCharactersRequest, sess
     for suggestion in req.suggestions:
         if suggestion.action == "use_existing" and suggestion.existing_character_id:
             char = session.get(Character, suggestion.existing_character_id)
-            if char and char not in project.characters:
-                project.characters.append(char)
+            if char:
+                link = session.get(ProjectCharacterLink, {"project_id": project_id, "character_id": char.id})
+                if not link:
+                    link = ProjectCharacterLink(
+                        project_id=project_id,
+                        character_id=char.id,
+                        alias=suggestion.discovered_name
+                    )
+                    session.add(link)
+                else:
+                    link.alias = suggestion.discovered_name
         elif suggestion.action == "create_new":
             new_id = str(uuid.uuid4())
             char = Character(
@@ -209,7 +239,13 @@ def batch_save_characters(project_id: str, req: BatchSaveCharactersRequest, sess
                 age_category=suggestion.age_category
             )
             session.add(char)
-            project.characters.append(char)
+            # Create link explicitly so we can set alias to match name initially
+            link = ProjectCharacterLink(
+                project_id=project_id,
+                character_id=char.id,
+                alias=suggestion.discovered_name
+            )
+            session.add(link)
             
     session.commit()
     return {"ok": True, "message": f"Saved {len(req.suggestions)} characters to project"}
@@ -242,6 +278,20 @@ def unlink_character_from_project(project_id: str, character_id: str, session: S
     session.delete(link)
     session.commit()
     return {"ok": True, "message": "Character unlinked from project"}
+
+class AliasUpdateRequest(BaseModel):
+    alias: Optional[str]
+
+@router.put("/{project_id}/characters/{character_id}/alias")
+def update_character_alias(project_id: str, character_id: str, req: AliasUpdateRequest, session: Session = Depends(get_session)):
+    link = session.get(ProjectCharacterLink, {"project_id": project_id, "character_id": character_id})
+    if not link:
+        raise HTTPException(status_code=404, detail="Character not linked to project")
+        
+    link.alias = req.alias
+    session.add(link)
+    session.commit()
+    return {"ok": True, "message": "Alias updated successfully"}
 
 class SwapCharacterRequest(BaseModel):
     old_character_id: str
