@@ -4,6 +4,7 @@ from sqlmodel import Session, select
 from pydantic import BaseModel
 import uuid
 import os
+import time
 
 from db.database import get_session
 from db.models import Scene, SceneLine, Project, Character, DictionaryEntry, ProjectCharacterLink, CharacterLanguageProfile
@@ -439,8 +440,9 @@ def generate_audio(scene_id: str, session: Session = Depends(get_session)):
             
             # Update audio_url for all lines in the chunk
             final_url = os.path.abspath(chunk_file_path) if project.storage_path else f"/{chunk_file_path}"
+            final_url_with_v = f"{final_url}?v={int(time.time())}"
             for line, char, _, _ in chunk:
-                line.audio_url = final_url
+                line.audio_url = final_url_with_v
                 session.add(line)
             
         # Stitch them together
@@ -452,7 +454,8 @@ def generate_audio(scene_id: str, session: Session = Depends(get_session)):
         session.commit()
         raise HTTPException(status_code=500, detail=f"Audio generation failed: {str(e)}")
         
-    scene.audio_url = os.path.abspath(final_file_path) if project.storage_path else f"/{final_file_path}"
+    base_url = os.path.abspath(final_file_path) if project.storage_path else f"/{final_file_path}"
+    scene.audio_url = f"{base_url}?v={int(time.time())}"
     scene.status = "completed"
     session.commit()
     session.refresh(scene)
@@ -559,16 +562,17 @@ def generate_line_audio(scene_id: str, line_id: int, session: Session = Depends(
         raise HTTPException(status_code=500, detail=f"Audio generation failed: {str(e)}")
 
     final_url = os.path.abspath(chunk_file_path) if project and project.storage_path else f"/{chunk_file_path}"
+    final_url_with_v = f"{final_url}?v={int(time.time())}"
     
     # Update audio_url for all lines in the chunk
     for chunk_line, _, _, _ in target_chunk:
-        chunk_line.audio_url = final_url
+        chunk_line.audio_url = final_url_with_v
         
         # We'll create for all lines in the chunk.
         t_num = len(chunk_line.audio_takes) + 1
         take = LineAudioTake(
             scene_line_id=chunk_line.id,
-            audio_url=final_url,
+            audio_url=final_url_with_v,
             take_number=t_num
         )
         session.add(take)
@@ -585,7 +589,7 @@ def generate_line_audio(scene_id: str, line_id: int, session: Session = Depends(
         c_path = None
         
         if c_line.audio_url:
-            c_path = c_line.audio_url
+            c_path = c_line.audio_url.split('?')[0]
             if c_path.startswith('/static/'):
                 c_path = c_path.lstrip('/')
         else:
@@ -600,7 +604,8 @@ def generate_line_audio(scene_id: str, line_id: int, session: Session = Depends(
     if chunk_files:
         final_scene_file = os.path.join(base_dir, f"{scene_id}.wav")
         stitch_wavs(chunk_files, final_scene_file)
-        scene.audio_url = os.path.abspath(final_scene_file) if project and project.storage_path else f"/{final_scene_file}"
+        base_scene_url = os.path.abspath(final_scene_file) if project and project.storage_path else f"/{final_scene_file}"
+        scene.audio_url = f"{base_scene_url}?v={int(time.time())}"
         session.add(scene)
     
     session.commit()
