@@ -115,7 +115,12 @@ class GeminiAudioClient:
                 voice_config=speaker_configs[0].voice_config
             )
         else:
-            # API strictly requires 2
+            # Gemini TTS API strictly supports max 2 speakers per call.
+            # The chunker should guarantee this, but log a warning if not.
+            if len(speaker_configs) > 2:
+                speaker_ids = [sc.speaker for sc in speaker_configs]
+                print(f"WARNING: chunk has {len(speaker_configs)} unique speakers {speaker_ids}, "
+                      f"truncating to first 2. Check chunking logic.")
             speech_config = types.SpeechConfig(
                 multi_speaker_voice_config=types.MultiSpeakerVoiceConfig(
                     speaker_voice_configs=speaker_configs[:2]
@@ -272,21 +277,27 @@ class GeminiTextClient:
                 
         raise RuntimeError("All models and retries failed.")
         
-    def extract_script_from_text(self, raw_text: str, characters: List[Character]) -> List[ExtractedLine]:
+    def extract_script_from_text(self, raw_text: str, characters: List) -> List[ExtractedLine]:
         """
         Uses Gemini 3.5 Flash to automatically extract a script from raw text.
+        `characters` can be List[Character] or List[ProjectCharacterResponse] (which has alias).
+        The alias (project-specific book name) is used as the primary Name in the prompt so
+        Gemini can match character names as they appear in the source text.
         """
         prompt_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "prompts", "script_extractor.md")
         with open(prompt_path, "r", encoding="utf-8") as f:
             system_instruction = f.read()
-            
-        char_list_str = "\n".join([f"- ID: {c.id}, Name: {c.name}, Role/Voice: {c.prompt_style or 'Default'}" for c in characters])
+
+        # Use alias (project-specific name) as the Name sent to Gemini so it can match
+        # names as they appear in the book. Fall back to global name if no alias set.
+        char_list_str = "\n".join([
+            f"- ID: {c.id}, Name: {getattr(c, 'alias', None) or c.name}, Role/Voice: {c.prompt_style or 'Default'}"
+            for c in characters
+        ])
         
         user_prompt = f"CHARACTERS:\n{char_list_str}\n\nRAW_TEXT:\n{raw_text}"
         
         response = self._generate_with_retry(user_prompt, system_instruction, list[ExtractedLine])
-        
-        import json
         
         try:
             data = json.loads(response.text)
@@ -306,8 +317,6 @@ class GeminiTextClient:
         user_prompt = f"RAW_TEXT:\n{raw_text}"
         
         response = self._generate_with_retry(user_prompt, system_instruction, list[DiscoveredCharacter])
-        
-        import json
         
         try:
             data = json.loads(response.text)

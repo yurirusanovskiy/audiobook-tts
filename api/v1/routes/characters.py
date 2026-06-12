@@ -134,15 +134,28 @@ def generate_sample(character_id: str, session: Session = Depends(get_session)):
     if not char:
         raise HTTPException(status_code=404, detail="Character not found")
         
-    # Construct base sample text
-    text = f"Привет! Меня зовут {char.name}, а так звучит мой голос."
-    
-    # Run through ruaccent
+    # Determine the character's primary language from their language profiles
+    SAMPLE_TEXTS = {
+        "ru": f"Привет! Меня зовут {char.name}, а так звучит мой голос.",
+        "en": f"Hello! My name is {char.name}, and this is what my voice sounds like.",
+        "ro": f"Bună ziua! Numele meu este {char.name}, și aceasta este vocea mea.",
+        "es": f"¡Hola! Me llamo {char.name}, y así suena mi voz.",
+        "he": f"שלום! שמי {char.name}, וכך נשמע קולי.",
+    }
+    # Pick language from profiles; default to Russian (primary use case)
+    lang_prefix = "ru"
+    if char.language_profiles:
+        first_profile = char.language_profiles[0]
+        lang_prefix = first_profile.language_code.lower().split("-")[0]
+    text = SAMPLE_TEXTS.get(lang_prefix, SAMPLE_TEXTS["en"])
+    preprocessor_lang = f"{lang_prefix}-{lang_prefix.upper()}" if lang_prefix != "ru" else "ru-RU"
+
+    # Run through language-appropriate preprocessor for phonetic accents
     try:
-        preprocessor = PreprocessorFactory.get_preprocessor("ru-RU")
+        preprocessor = PreprocessorFactory.get_preprocessor(preprocessor_lang)
         text_for_tts = preprocessor.process(text, {})
     except Exception as e:
-        print(f"Failed to run ruaccent for sample: {e}")
+        print(f"Failed to run preprocessor for sample: {e}")
         text_for_tts = text
         
     # Build prompt
@@ -159,12 +172,13 @@ def generate_sample(character_id: str, session: Session = Depends(get_session)):
     if char.prompt_style:
         final_prompt += f" {char.prompt_style}."
         
-    profile = next((p for p in char.language_profiles if p.language_code.lower().startswith("ru")), None)
+    # Add language profile accent info for any language
+    profile = next((p for p in char.language_profiles if p.language_code.lower().startswith(lang_prefix)), None)
     if profile:
         if profile.is_native:
-            final_prompt += " Speaks native Russian."
+            final_prompt += f" Speaks native {lang_prefix.upper()}."
         elif profile.accent_description:
-            final_prompt += f" Speaks Russian with {profile.accent_description}."
+            final_prompt += f" {profile.accent_description}."
             
     final_prompt = final_prompt.strip()
     

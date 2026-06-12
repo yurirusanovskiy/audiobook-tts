@@ -14,9 +14,18 @@ router = APIRouter(prefix="/projects", tags=["Projects"])
 
 @router.get("/stream-audio")
 def stream_audio(path: str):
-    if not os.path.exists(path):
+    """Stream an audio file. Path must be within allowed audio output directories."""
+    abs_path = os.path.abspath(path)
+    # Security: only serve files from within our known audio output directories
+    allowed_bases = [
+        os.path.abspath("static"),
+        os.path.expanduser("~/Documents/AudioBooks_Outputs"),
+    ]
+    if not any(abs_path.startswith(base) for base in allowed_bases):
+        raise HTTPException(status_code=403, detail="Access denied: path is outside allowed directories")
+    if not os.path.exists(abs_path):
         raise HTTPException(status_code=404, detail="Audio file not found")
-    return FileResponse(path)
+    return FileResponse(abs_path)
 
 
 class ProjectReadWithStats(BaseModel):
@@ -117,8 +126,18 @@ def read_project_characters(project_id: str, session: Session = Depends(get_sess
     results = []
     for char in project.characters:
         link = session.get(ProjectCharacterLink, {"project_id": project_id, "character_id": char.id})
-        char_dict = char.model_dump()
-        char_dict["alias"] = link.alias if link else None
+        # Explicitly extract scalar fields only — avoids triggering N+1 lazy loads on relationships
+        char_dict = {
+            "id": char.id,
+            "name": char.name,
+            "voice_id": char.voice_id,
+            "prompt_style": char.prompt_style,
+            "pitch_override": char.pitch_override,
+            "gender": char.gender,
+            "age_category": char.age_category,
+            "sample_audio_url": char.sample_audio_url,
+            "alias": link.alias if link else None,
+        }
         results.append(ProjectCharacterResponse(**char_dict))
     return results
 
@@ -152,7 +171,14 @@ def discover_characters(project_id: str, req: DiscoverCharactersRequest, session
 
     # 2. Find currently used voices in this project to avoid conflicts
     used_voices = {c.voice_id for c in project.characters}
-    available_voices = ["Puck", "Charon", "Kore", "Fenrir", "Aoede"]
+    # All 30 Gemini prebuilt TTS voices
+    available_voices = [
+        "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Aoede",
+        "Leda", "Orus", "Pegasus", "Schedar", "Gacrux", "Pulcherrima",
+        "Achird", "Zubenelgenubi", "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat",
+        "Algenib", "Rasalghul", "Umbriel", "Erinome", "Iapetus", "Kalyke",
+        "Caelum", "Dione", "Callisto", "Laomedeia", "Enif", "Alnilam",
+    ]
 
     suggestions = []
     
@@ -280,7 +306,7 @@ def unlink_character_from_project(project_id: str, character_id: str, session: S
     return {"ok": True, "message": "Character unlinked from project"}
 
 class AliasUpdateRequest(BaseModel):
-    alias: Optional[str]
+    alias: Optional[str] = None  # None = clear the alias
 
 @router.put("/{project_id}/characters/{character_id}/alias")
 def update_character_alias(project_id: str, character_id: str, req: AliasUpdateRequest, session: Session = Depends(get_session)):

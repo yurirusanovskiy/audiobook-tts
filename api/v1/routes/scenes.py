@@ -115,11 +115,26 @@ def generate_scene_from_text(project_id: str, request: GenerateFromTextRequest, 
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
         
-    characters = project.characters
+    from api.v1.routes.projects import ProjectCharacterResponse
+    characters_with_alias = []
+    for char in project.characters:
+        link = session.get(ProjectCharacterLink, {"project_id": project.id, "character_id": char.id})
+        char_dict = {
+            "id": char.id,
+            "name": char.name,
+            "voice_id": char.voice_id,
+            "prompt_style": char.prompt_style,
+            "pitch_override": char.pitch_override,
+            "gender": char.gender,
+            "age_category": char.age_category,
+            "sample_audio_url": char.sample_audio_url,
+            "alias": link.alias if link else None,
+        }
+        characters_with_alias.append(ProjectCharacterResponse(**char_dict))
     
     text_client = GeminiTextClient()
     try:
-        extracted_lines = text_client.extract_script_from_text(request.raw_text, characters)
+        extracted_lines = text_client.extract_script_from_text(request.raw_text, characters_with_alias)
     except HTTPException:
         raise
     except Exception as e:
@@ -165,31 +180,50 @@ def extract_script(scene_id: str, session: Session = Depends(get_session)):
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    from api.v1.routes.projects import ProjectCharacterResponse
+    characters_with_alias = []
+    for char in project.characters:
+        link = session.get(ProjectCharacterLink, {"project_id": project.id, "character_id": char.id})
+        char_dict = {
+            "id": char.id,
+            "name": char.name,
+            "voice_id": char.voice_id,
+            "prompt_style": char.prompt_style,
+            "pitch_override": char.pitch_override,
+            "gender": char.gender,
+            "age_category": char.age_category,
+            "sample_audio_url": char.sample_audio_url,
+            "alias": link.alias if link else None,
+        }
+        characters_with_alias.append(ProjectCharacterResponse(**char_dict))
+
     text_client = GeminiTextClient()
     try:
-        extracted_lines = text_client.extract_script_from_text(scene.raw_text, project.characters)
+        extracted_lines = text_client.extract_script_from_text(scene.raw_text, characters_with_alias)
     except Exception as e:
         scene.status = "error"
         session.commit()
         raise HTTPException(status_code=500, detail=str(e))
         
-    # Ensure Narrator character exists for this project
-    narrator = None
-    for char in project.characters:
-        if char.name.lower() == "narrator":
-            narrator = char
-            break
+    # Ensure Narrator character exists for this project.
+    # Query DB directly to avoid race condition from stale in-memory relationship list.
+    narrator = session.exec(
+        select(Character)
+        .join(ProjectCharacterLink, ProjectCharacterLink.character_id == Character.id)
+        .where(
+            ProjectCharacterLink.project_id == project.id,
+            Character.name == "Narrator"
+        )
+    ).first()
             
     if not narrator:
-        import uuid
         narrator = Character(
             id=str(uuid.uuid4()),
             name="Narrator",
             gender="Any",
             age_category="Any",
-            traits="Clear, articulate",
             voice_id="Aoede",
-            prompt_style="Calm and clear"
+            prompt_style="Calm and clear narrative voice"
         )
         session.add(narrator)
         session.commit()

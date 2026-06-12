@@ -5,6 +5,7 @@ from sqlmodel import SQLModel, Field, Relationship
 class ProjectCharacterLink(SQLModel, table=True):
     project_id: str = Field(foreign_key="project.id", primary_key=True)
     character_id: str = Field(foreign_key="character.id", primary_key=True)
+    alias: Optional[str] = Field(default=None, description="The name of the character in this specific project (e.g. 'Bill' for global character 'Sindbad')")
 
 class Project(SQLModel, table=True):
     id: str = Field(primary_key=True, description="Unique identifier for the project, e.g., 'harry_potter_1'")
