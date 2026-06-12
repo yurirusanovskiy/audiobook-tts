@@ -84,10 +84,6 @@ class RussianPreprocessor(BasePreprocessor):
             # Initialize the model (using default or lightweight parameters depending on requirements)
             self._accentuator = RUAccent()
             self._accentuator.load(omograph_model_size='big_poetry', use_dictionary=True)
-            
-            # Disable automatic yo-fication (changing 'е' to 'ё') as requested by user
-            self._accentuator._process_yo = lambda words, sentence: words
-            
             print("[RussianPreprocessor] ruaccent model loaded.")
         return self._accentuator
 
