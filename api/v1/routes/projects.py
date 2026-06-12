@@ -258,6 +258,49 @@ def discover_characters(project_id: str, req: DiscoverCharactersRequest, session
 
         suggestions.append(suggestion)
 
+    # 3. Always ensure the Narrator is included in the suggestions
+    has_narrator = any("narrator" in s.discovered_name.lower() or "рассказчик" in s.discovered_name.lower() for s in suggestions)
+    
+    if not has_narrator:
+        # Check if project already has a linked narrator
+        narrator_link = None
+        for char in project.characters:
+            if "narrator" in char.name.lower() or "рассказчик" in char.name.lower():
+                narrator_link = char
+                break
+                
+        if narrator_link:
+            suggestions.insert(0, CharacterDiscoverySuggestion(
+                discovered_name="Narrator",
+                traits="The voice telling the story",
+                gender=narrator_link.gender or "male",
+                age_category=narrator_link.age_category or "adult",
+                action="use_existing",
+                existing_character_id=narrator_link.id
+            ))
+        else:
+            # Check for a global narrator in DB
+            global_narrator = session.exec(select(Character).where(Character.name.ilike("%narrator%"))).first()
+            if global_narrator:
+                suggestions.insert(0, CharacterDiscoverySuggestion(
+                    discovered_name="Narrator",
+                    traits="The voice telling the story",
+                    gender=global_narrator.gender or "male",
+                    age_category=global_narrator.age_category or "adult",
+                    action="use_existing",
+                    existing_character_id=global_narrator.id
+                ))
+            else:
+                # Create a completely new narrator
+                suggestions.insert(0, CharacterDiscoverySuggestion(
+                    discovered_name="Narrator",
+                    traits="The voice telling the story",
+                    gender="male",
+                    age_category="adult",
+                    action="create_new",
+                    suggested_voice_id="Puck"
+                ))
+
     return suggestions
 
 class BatchSaveCharactersRequest(BaseModel):
