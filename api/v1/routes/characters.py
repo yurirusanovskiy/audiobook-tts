@@ -165,9 +165,10 @@ def generate_sample(character_id: str, session: Session = Depends(get_session)):
     final_prompt = final_prompt.strip()
     
     # Save to file path setup
-    os.makedirs("static/samples", exist_ok=True)
+    samples_dir = os.path.expanduser("~/Documents/AudioBooks_Outputs/samples")
+    os.makedirs(samples_dir, exist_ok=True)
     filename = f"{char.id}.wav"
-    filepath = os.path.join("static", "samples", filename)
+    filepath = os.path.join(samples_dir, filename)
 
     # Call Gemini
     audio_client = GeminiAudioClient()
@@ -179,9 +180,8 @@ def generate_sample(character_id: str, session: Session = Depends(get_session)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Gemini generation failed: {e}")
         
-    # Update DB
-    url = f"/static/samples/{filename}"
-    char.sample_audio_url = url
+    # Update DB with absolute path
+    char.sample_audio_url = filepath
     session.add(char)
     session.commit()
     session.refresh(char)
