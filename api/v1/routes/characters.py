@@ -15,6 +15,7 @@ class CharacterResponse(BaseModel):
     prompt_style: Optional[str] = None
     gender: Optional[str] = None
     age_category: Optional[str] = None
+    pitch_override: Optional[str] = None
     sample_audio_url: Optional[str] = None
     language_profiles: List[CharacterLanguageProfile] = []
 
@@ -48,6 +49,7 @@ class CharacterUpdate(BaseModel):
     prompt_style: Optional[str] = None
     gender: Optional[str] = None
     age_category: Optional[str] = None
+    pitch_override: Optional[str] = None
 
 @router.put("/{character_id}", response_model=CharacterResponse)
 def update_character(character_id: str, char_in: CharacterUpdate, session: Session = Depends(get_session)):
@@ -65,6 +67,8 @@ def update_character(character_id: str, char_in: CharacterUpdate, session: Sessi
         character.gender = char_in.gender
     if char_in.age_category is not None:
         character.age_category = char_in.age_category
+    if char_in.pitch_override is not None:
+        character.pitch_override = char_in.pitch_override
         
     session.commit()
     session.refresh(character)
