@@ -582,12 +582,20 @@ def generate_line_audio(scene_id: str, line_id: int, session: Session = Depends(
     chunk_files = []
     for idx, chunk in enumerate(chunks):
         c_line = chunk[0][0]
+        c_path = None
+        
         if c_line.audio_url:
             c_path = c_line.audio_url
             if c_path.startswith('/static/'):
                 c_path = c_path.lstrip('/')
-            if os.path.exists(c_path):
-                chunk_files.append(c_path)
+        else:
+            # Fallback to predictable chunk filename if audio_url is not in DB
+            speakers_in_chunk = sorted(list(set([c.id for _, c, _, _ in chunk])))
+            speakers_str = "_and_".join(speakers_in_chunk)
+            c_path = os.path.join(scene_dir, f"{idx+1:02d}_{scene_id}_{speakers_str}.wav")
+            
+        if c_path and os.path.exists(c_path):
+            chunk_files.append(c_path)
             
     if chunk_files:
         final_scene_file = os.path.join(base_dir, f"{scene_id}.wav")
