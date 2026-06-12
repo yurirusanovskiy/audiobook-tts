@@ -84,6 +84,10 @@ class RussianPreprocessor(BasePreprocessor):
             # Initialize the model (using default or lightweight parameters depending on requirements)
             self._accentuator = RUAccent()
             self._accentuator.load(omograph_model_size='big_poetry', use_dictionary=True)
+            
+            # Disable automatic yo-fication (changing 'е' to 'ё') as requested by user
+            self._accentuator._process_yo = lambda words, sentence: words
+            
             print("[RussianPreprocessor] ruaccent model loaded.")
         return self._accentuator
 
@@ -104,15 +108,7 @@ class RussianPreprocessor(BasePreprocessor):
                 placeholder = f"CWORD{i}"
                 placeholder_map[placeholder] = replacement
                 
-                # Treat 'е' and 'ё' as equivalent in the regex pattern
                 escaped_word = re.escape(word)
-                mapped_chars = []
-                for char in escaped_word:
-                    if char.lower() in ('е', 'ё'):
-                        mapped_chars.append('[еёЕЁ]')
-                    else:
-                        mapped_chars.append(char)
-                escaped_word = "".join(mapped_chars)
                 
                 pattern = re.compile(rf'\b{escaped_word}\b', re.IGNORECASE)
                 protected_text = pattern.sub(placeholder, protected_text)
